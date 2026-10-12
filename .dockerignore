@@ -1,0 +1,14 @@
+.git
+.gitignore
+.DS_Store
+**/bin/
+**/obj/
+**/TestResults/
+.env
+.env.*
+**/.env
+**/.env.*
+.claude/
+.codex/
+docs/
+AGENTS.md
