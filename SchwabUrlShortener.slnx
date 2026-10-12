@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Shortener.Analytics/Shortener.Analytics.csproj" />
+    <Project Path="src/Shortener.Api/Shortener.Api.csproj" />
+    <Project Path="src/Shortener.Application/Shortener.Application.csproj" />
+    <Project Path="src/Shortener.Domain/Shortener.Domain.csproj" />
+    <Project Path="src/Shortener.Infrastructure/Shortener.Infrastructure.csproj" />
+    <Project Path="src/Shortener.Web/Shortener.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Shortener.IntegrationTests/Shortener.IntegrationTests.csproj" />
+    <Project Path="tests/Shortener.UnitTests/Shortener.UnitTests.csproj" />
+  </Folder>
+</Solution>

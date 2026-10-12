@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-Shortener.Analytics-7bb7059a-25b9-4166-9bb7-8b64f7f2d459</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Shortener.Application\Shortener.Application.csproj" />
+    <ProjectReference Include="..\Shortener.Infrastructure\Shortener.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
