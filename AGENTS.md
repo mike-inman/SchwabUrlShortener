@@ -1,13 +1,20 @@
 # SchwabUrlShortener agent guide — 2026-10-12
 
-This repository is the .NET 10 starter solution for the Schwab URL shortener assignment. The eight generated projects are registered in `SchwabUrlShortener.slnx`. The current tests are template tests; their passing result does not establish URL shortener behavior.
+This repository is the .NET 10 starter solution for the Schwab URL shortener assignment. All eight generated projects are in `SchwabUrlShortener.slnx`. The current tests are template tests; passing them does not establish URL shortener behavior.
 
-## Before changing files
+## Start with the actual repository state
 
-- Confirm the physical checkout path is `/Users/michaelinman/Repos/SchwabUrlShortener` and inspect `git status --short --branch`.
-- Treat existing untracked or modified files as user-owned. Preserve them unless the user explicitly assigns them to the task. In particular, do not add the local assignment PDF under `docs/` to GitHub.
-- Keep local API keys, passwords, and other credentials intact. Never print, delete, or commit them. The `.env` files and local `.claude/` and `.codex/` directories are excluded by `.gitignore`.
-- Before editing a configuration that contains credentials, make a local backup. Do not remove unrelated MCP server configurations from `claude_desktop_config.json` if that file is ever introduced here.
+- Confirm `pwd -P` is `/Users/michaelinman/Repos/SchwabUrlShortener`. Read this file and the task's relevant source and documentation before editing.
+- Inspect `git status --short --branch`, the local commit, and `origin/main`. Treat pre-existing modified and untracked files as user-owned. Do not reset, stash, overwrite, or delete them to make the checkout appear clean. If a task overlaps one of those files, resolve ownership and scope before editing it.
+- Keep changes within the assigned task. For substantial work, write a dated plan in `docs/YYYY-MM-DD-HHMM-purpose.md` with purpose, scope, tasks, and acceptance criteria. Record the outcome and any unfinished work there. If scope grows, document a follow-up instead of silently expanding the task.
+- Use relevant available MCP servers when they help with the task. Verify their results against the repository and report the evidence actually obtained.
+
+## Protect local data and access
+
+- Preserve local API keys, passwords, and other credentials. Never print, delete, or commit them. The `.env` files and local `.claude/` and `.codex/` directories are excluded by `.gitignore`; leave them untouched unless the user assigns a specific change.
+- Do not add the local assignment PDF under `docs/` to GitHub. Other dated project documents may be committed when they are part of the assigned work.
+- Back up a credential-bearing configuration before changing it. If `claude_desktop_config.json` is ever introduced here, preserve all unrelated MCP server entries. Do not include secrets, tokens, cookies, authorization headers, or raw credential material in logs, URLs, error messages, documentation, or commits.
+- Do not weaken authentication or other security controls to make a test pass. State the exact access or configuration blocker instead.
 
 ## Solution structure
 
@@ -20,10 +27,18 @@ This repository is the .NET 10 starter solution for the Schwab URL shortener ass
 - `tests/Shortener.UnitTests`: unit tests for Application and Domain.
 - `tests/Shortener.IntegrationTests`: integration tests for API and Infrastructure.
 
-Keep business rules out of the host projects and avoid adding a project reference from Domain to an outer layer. Add new dependencies only when code needs them.
+Keep business rules out of host projects and do not add a dependency from Domain to an outer layer. Add project and package references only when the implementation needs them.
 
-## Validation and documentation
+## Implementation and verification
 
-- Run `dotnet build SchwabUrlShortener.slnx` and `dotnet test SchwabUrlShortener.slnx` after solution or project changes. Report the exact results and whether tests exercise real behavior or only the generated scaffold.
-- Put plans in `docs/` with the date, time, and purpose in the filename. Date other new documents as well.
-- Commit the intended task changes after validation. Check staged paths before committing and verify the pushed branch when publishing. Do not stage local secrets or unrelated files.
+- Build the real application path. Test doubles and fixtures belong in isolated tests; never present a mock, hard-coded response, or simulated integration as delivered behavior.
+- For API, worker, or external integration changes, make failures inspectable: preserve useful exception context, use structured and sanitized logs, carry request or operation correlation IDs where available, and give callers safe, actionable errors. For background work, consider retry, duplicate processing, and durable failure handling before claiming operational reliability.
+- After a substantive edit, run the narrowest useful check first. For solution or project changes, run `dotnet build SchwabUrlShortener.slnx` and `dotnet test SchwabUrlShortener.slnx`. Preserve existing tests; add meaningful tests for new behavior rather than treating the template tests as acceptance.
+- Distinguish implementation, local test results, real service verification, deployment, and operational acceptance. State which environment and paths were exercised, plus any remaining blockers.
+
+## Finish and hand off
+
+- Date new documents. Keep plans, implementation notes, and validation records under `docs/` when the work warrants them. For multi-session work, record what changed, what was verified, and the next action so the task can resume without reconstructing it from chat.
+- Check the staged paths and diff before committing. Commit only intended changes, keeping unrelated local files and secrets out. Verify the pushed branch and commit when publishing.
+- Report files changed, checks run, known issues, and any intentional pre-existing untracked files. Do not erase user-owned files to claim a clean worktree.
+- Before deleting a local or remote branch, create and push an `archive/<branch>` tag for its tip. Do not delete branches merely because they are old.
