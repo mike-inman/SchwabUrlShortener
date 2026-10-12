@@ -42,3 +42,15 @@ Keep business rules out of host projects and do not add a dependency from Domain
 - Check the staged paths and diff before committing. Commit only intended changes, keeping unrelated local files and secrets out. Verify the pushed branch and commit when publishing.
 - Report files changed, checks run, known issues, and any intentional pre-existing untracked files. Do not erase user-owned files to claim a clean worktree.
 - Before deleting a local or remote branch, create and push an `archive/<branch>` tag for its tip. Do not delete branches merely because they are old.
+
+## Gated implementation handoffs
+
+For a handoff to another coding agent, start from `docs/2026-10-12-1855-gated-implementation-handoff-template.md`. Save the filled handoff in `docs/` with its drafting date, time, and purpose in the filename. Replace every `{{...}}` field, keep the sections in order, and state “Not applicable” with a reason for any section that does not affect the slice. The realtime section records the actual progress and refresh design; the source project's blanket SSE policy does not apply here.
+
+The handoff must identify the exact worktree and branch, preserve existing local work and secrets, define in-scope and out-of-scope work, name files to inspect before edits, specify narrow checks, and make completion criteria reviewable. Validate it before dispatch:
+
+```bash
+bash scripts/check-codex-handoff.sh docs/<dated-handoff-file>.md
+```
+
+The checker returns 0 for a valid format, 1 for a format failure, and 2 for a missing file or incorrect invocation. A passing format check does not approve the work or prove implementation. Run `bash scripts/test-check-codex-handoff.sh` when changing the checker.
