@@ -1,6 +1,10 @@
 ## Slice 7 — Scale Validation and Closeout Handoff
-Status: drafted on 2026-10-12
-You are working in /Users/michaelinman/Repos/SchwabUrlShortener.
+Status: drafted on 2026-10-13
+You are working in /Users/michaelinman/Repos/SchwabUrlShortener-slice7.
+Handoff state: ready for Codex; originally drafted on 2026-10-12. Branch: `codex/slice-7-scale-validation`.
+Baseline: `main` at `f7102648ae48208f1acadf375a17bc59ab521dde`, pushed and remotely verified on 2026-10-13. Start from this branch and preserve every other worktree.
+
+Integration evidence before Slice 7: the merged solution built with zero warnings/errors; the isolated Compose suite passed 83/83 (integration 20, unit 25, Web 38); public `/` and `/health/ready` returned 200, guest creation 201, and test redirect 302. The disposable `schwab-main-integration` stack and its own volumes were removed after verification. Existing `schwab-url-shortener-*` containers and volumes were untouched. This is local evidence, not production capacity or live Entra verification.
 
 Follow these repo standards exactly:
 - Read `AGENTS.md`; confirm `pwd -P`, branch, current commit, and `git status --short --branch` before edits.
