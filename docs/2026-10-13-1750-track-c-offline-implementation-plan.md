@@ -29,4 +29,4 @@ Author the corrected Azure staging contract in the isolated `codex/azure-infra` 
 
 The corrected contract and handoff were copied and committed. C1–C4 Bicep modules, staging parameters, azd prebuilt-image mapping, image build script, and the infrastructure guide were authored. Bicep build/lint, parameter compilation with a disposable placeholder, shell syntax, YAML/JSON parsing, and diff whitespace checks passed. The confirmed Azure account and nonexistent staging resource group were checked read-only.
 
-No Azure resource was created. The contract's Front Door origin host header conflicts with its `AllowedHosts` settings, so the handoff's “stop if the contract is wrong” rule holds deployment. The dated validation note records the exact mismatch and subsequent gates.
+No Azure resource was created in the initial offline pass. The 18:10 contract revision resolved the Front Door origin `Host` and `AllowedHosts` mismatch; the Bicep and validation record were updated accordingly. The next gates are operator inputs, preview, and phased deployment.

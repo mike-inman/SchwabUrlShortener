@@ -45,6 +45,8 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
+var apiOriginFqdn = 'ca-shortener-api-stg.${environment.properties.defaultDomain}'
+var webOriginFqdn = 'ca-shortener-web-stg.${environment.properties.defaultDomain}'
 var commonSecrets = [
   { name: 'pg-app', keyVaultUrl: pgAppSecretUrl }
   { name: 'redis', keyVaultUrl: redisSecretUrl }
@@ -83,7 +85,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_CLIENT_ID', value: apiIdentity.clientId }
             { name: 'AzureAd__ClientId', value: apiClientId }
             { name: 'AzureAd__TenantId', value: 'organizations' }
-            { name: 'AllowedHosts', value: '${publicHost};ca-shortener-api-stg' }
+            { name: 'AllowedHosts', value: '${apiOriginFqdn};ca-shortener-api-stg;${publicHost}' }
             { name: 'Kafka__BootstrapServers', value: '${eventhubsHost}:9093' }
             { name: 'Kafka__Topic', value: 'managed-clicks-v2' }
           ], enableScaleOutSettings ? [
@@ -144,7 +146,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
           env: concat(commonEnv, [
             { name: 'ConnectionStrings__Redis', secretRef: 'redis' }
             { name: 'AZURE_CLIENT_ID', value: webIdentity.clientId }
-            { name: 'AllowedHosts', value: publicHost }
+            { name: 'AllowedHosts', value: '${webOriginFqdn};${publicHost}' }
             { name: 'ShortenerApi__BaseUrl', value: 'http://ca-shortener-api-stg/' }
             { name: 'ShortenerApi__AllowedInternalHttpHosts', value: 'ca-shortener-api-stg' }
           ], enableScaleOutSettings ? [

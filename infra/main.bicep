@@ -105,10 +105,11 @@ resource budget 'Microsoft.Consumption/budgets@2023-05-01' = if (!empty(budgetCo
   name: 'budget-shortener-stg'
   properties: {
     category: 'Cost'
-    amount: 300
+    amount: 600
     timeGrain: 'Monthly'
     timePeriod: { startDate: '2026-10-01T00:00:00Z' }
     notifications: {
+      actual50: { enabled: true, operator: 'GreaterThan', threshold: 50, contactEmails: [ budgetContactEmail ] }
       actual80: { enabled: true, operator: 'GreaterThan', threshold: 80, contactEmails: [ budgetContactEmail ] }
       actual100: { enabled: true, operator: 'GreaterThan', threshold: 100, contactEmails: [ budgetContactEmail ] }
     }

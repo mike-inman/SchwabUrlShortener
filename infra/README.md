@@ -1,6 +1,6 @@
 # Azure staging infrastructure — 2026-10-13
 
-This directory implements the [Azure scale-out contract](../docs/2026-10-13-1720-azure-scaleout-contract.md) for `rg-shortener-staging`. Read the [validation record](../docs/2026-10-13-1757-track-c-azure-infrastructure-validation.md) before running any deployment. The contract's Front Door origin host and application `AllowedHosts` settings currently conflict; C4 must wait for a contract correction.
+This directory implements the [Azure scale-out contract](../docs/2026-10-13-1720-azure-scaleout-contract.md) for `rg-shortener-staging`. Read the [validation record](../docs/2026-10-13-1757-track-c-azure-infrastructure-validation.md) before running any deployment. The 18:10 contract includes each app's origin FQDN in `AllowedHosts`.
 
 ## Parameters and environment
 
@@ -12,11 +12,11 @@ Use `Balanced_B1` only if the B0 SKU is unavailable in `centralus`; use `eastus2
 
 ## Phased workflow
 
-1. C1: confirm subscription, account, access, and that `rg-shortener-staging` does not already exist. Preview the resource group creation and foundation changes before provisioning. Do not modify any existing resource group. The foundation creates ACR before any image build.
+1. C1: confirm subscription, account, access, and that `rg-shortener-staging` does not already exist. Preview its creation with `az deployment sub what-if --location centralus --template-file infra/resource-group.bicep`, then create only that new group. Preview foundation changes with `azd provision --preview` before provisioning. Do not modify any existing resource group. The foundation creates ACR before any image build.
 2. C2: Michael sets the real PostgreSQL password without displaying it. Set `DEPLOYMENT_PHASE=data`, preview, then provision private data services. Verify each private endpoint and secret name without reading values.
 3. From a clean committed tree, run `infra/scripts/build-images.sh`. It runs `az acr build --target` for `api`, `web`, and `analytics`, finds each digest, and stores `SERVICE_*_IMAGE` in the active azd environment. A given Git commit reuses its existing ACR tag and digest. The script must never receive secrets as build args.
 4. C3: set `DEPLOYMENT_PHASE=apps`, preview, then provision. Run `azd deploy`; its `predeploy` hook verifies or builds the same digest images. The migration job uses the API digest. Start `caj-shortener-migrate-stg` once per release with `az containerapp job start --resource-group rg-shortener-staging --name caj-shortener-migrate-stg`, then inspect its execution status before allowing traffic. This job uses the direct PostgreSQL port and must not run concurrently with another migration.
-5. C4: after the origin host contract is corrected and the apps are healthy, set `DEPLOYMENT_PHASE=edge`, preview, then provision. Validate public routes and a WebSocket upgrade through Front Door. A custom domain additionally requires the DNS validation and certificate steps in the Azure portal.
+5. C4: after the apps are healthy, set `DEPLOYMENT_PHASE=edge`, preview, then provision. Validate public routes and a WebSocket upgrade through Front Door. A custom domain additionally requires the DNS validation and certificate steps in the Azure portal.
 
 The active staging replica set is API 1/1, Web 1/1, Analytics 0/0. The commented Track A set in `main.staging.bicepparam` is API 2/10, Web 2/6, Analytics 1/32. `enableScaleOutSettings=false` keeps Track A and B settings out of today's images. Enable it only after their code and Event Hubs idempotence value have been confirmed. `Kafka__EnableIdempotence=false` is a provisional setting, not a provider capability claim.
 
