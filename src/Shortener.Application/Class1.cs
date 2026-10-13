@@ -1,6 +1,3 @@
 ﻿namespace Shortener.Application;
 
-public class Class1
-{
-
-}
+// Application layer entry point is implemented by UrlShortenerService.
