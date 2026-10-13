@@ -18,7 +18,7 @@ Use `Balanced_B1` only if the B0 SKU is unavailable in `centralus`; use `eastus2
 4. C3: set `DEPLOYMENT_PHASE=apps`, preview, then provision. Run `azd deploy`; its `predeploy` hook verifies or builds the same digest images. The migration job uses the API digest. Start `caj-shortener-migrate-stg` once per release with `az containerapp job start --resource-group rg-shortener-staging --name caj-shortener-migrate-stg`, then inspect its execution status before allowing traffic. This job uses the direct PostgreSQL port and must not run concurrently with another migration.
 5. C4: after the apps are healthy, set `DEPLOYMENT_PHASE=edge`, preview, then provision. Validate public routes and a WebSocket upgrade through Front Door. A custom domain additionally requires the DNS validation and certificate steps in the Azure portal.
 
-The active staging replica set is API 1/1, Web 1/1, Analytics 0/0. The commented Track A set in `main.staging.bicepparam` is API 2/10, Web 2/6, Analytics 1/32. `enableScaleOutSettings=false` keeps Track A and B settings out of today's images. Enable it only after their code and Event Hubs idempotence value have been confirmed. `Kafka__EnableIdempotence=false` is a provisional setting, not a provider capability claim.
+The active staging replica set is API 1/1, Web 1/1, Analytics 0/0. The commented Track A set in `main.staging.bicepparam` is API 2/10, Web 2/6, Analytics 1/32. `enableScaleOutSettings=false` keeps Track A and B settings out of today's images. Enable it only after their code has merged. Track A confirmed Event Hubs idempotent Kafka producer support from Microsoft documentation, so `Kafka__EnableIdempotence=true` is staged behind that switch.
 
 ## Secrets and diagnosis
 

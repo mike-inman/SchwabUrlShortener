@@ -93,7 +93,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'Kafka__SaslMechanism', value: 'Plain' }
             { name: 'Kafka__SaslUsername', value: '$ConnectionString' }
             { name: 'Kafka__SaslPassword', secretRef: 'eventhubs' }
-            { name: 'Kafka__EnableIdempotence', value: 'false' }
+            { name: 'Kafka__EnableIdempotence', value: 'true' }
             { name: 'DataProtection__Mode', value: 'AzureBlob' }
             { name: 'DataProtection__ApplicationName', value: 'Shortener.Api' }
             { name: 'DataProtection__BlobUri', value: '${storageBlobBaseUrl}/dataprotection/api-keys.xml' }
@@ -206,7 +206,7 @@ resource analytics 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'Kafka__SaslMechanism', value: 'Plain' }
             { name: 'Kafka__SaslUsername', value: '$ConnectionString' }
             { name: 'Kafka__SaslPassword', secretRef: 'eventhubs' }
-            { name: 'Kafka__EnableIdempotence', value: 'false' }
+            { name: 'Kafka__EnableIdempotence', value: 'true' }
             { name: 'LiveUpdates__Mode', value: 'Redis' }
             { name: 'LiveUpdates__Channel', value: 'shortener:links:v1' }
             { name: 'LiveUpdates__DebounceMilliseconds', value: '1000' }
