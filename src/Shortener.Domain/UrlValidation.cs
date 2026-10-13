@@ -44,6 +44,6 @@ public static class UrlValidation
         var candidate = shortCode.Trim();
 
         return candidate.Length is >= 4 and <= 12 &&
-               candidate.All(char.IsLetterOrDigit);
+               candidate.All(c => c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9');
     }
 }

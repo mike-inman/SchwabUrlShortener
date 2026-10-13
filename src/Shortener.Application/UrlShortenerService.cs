@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Shortener.Application.Interfaces;
 using Shortener.Domain;
 
@@ -7,78 +8,76 @@ public sealed class UrlShortenerService : IUrlShortenerService
 {
     private const string AllowedChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     private readonly IUrlShortenerRepository _repository;
+    private readonly TimeProvider _clock;
 
-    public UrlShortenerService(IUrlShortenerRepository repository)
+    public UrlShortenerService(IUrlShortenerRepository repository, TimeProvider clock)
     {
         _repository = repository;
+        _clock = clock;
     }
 
-    public async Task<UrlMapping> CreateAsync(string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+    public Task<UrlMapping> CreateGuestAsync(string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+        => CreateAsync(null, originalUrl, requestedShortCode, cancellationToken);
+
+    public Task<UrlMapping> CreateManagedAsync(Guid tenantId, string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+    {
+        if (tenantId == Guid.Empty) throw new ArgumentException("A valid tenant is required.", nameof(tenantId));
+        return CreateAsync(tenantId, originalUrl, requestedShortCode, cancellationToken);
+    }
+
+    private async Task<UrlMapping> CreateAsync(Guid? tenantId, string originalUrl, string? requestedShortCode, CancellationToken cancellationToken)
     {
         var normalizedUrl = UrlValidation.NormalizeUrl(originalUrl);
-
         if (!UrlValidation.IsValidAbsoluteUrl(normalizedUrl))
-        {
             throw new ArgumentException("Original URL must be an absolute http or https URL.", nameof(originalUrl));
-        }
 
-        var existing = await _repository.GetByOriginalUrlAsync(normalizedUrl, cancellationToken);
-        if (existing is not null)
+        if (tenantId is { } owner)
         {
-            return existing;
+            var existing = await _repository.GetManagedByOriginalUrlAsync(owner, normalizedUrl, cancellationToken);
+            if (existing is not null) return existing;
         }
 
-        var finalShortCode = string.IsNullOrWhiteSpace(requestedShortCode)
-            ? GenerateShortCode()
-            : requestedShortCode.Trim();
-
-        if (!UrlValidation.IsValidShortCode(finalShortCode))
+        var custom = !string.IsNullOrWhiteSpace(requestedShortCode);
+        for (var attempt = 0; attempt < 10; attempt++)
         {
-            throw new ArgumentException("The short code must be 4 to 12 characters using letters or numbers only.", nameof(requestedShortCode));
+            var code = custom ? requestedShortCode!.Trim() : GenerateShortCode();
+            var now = _clock.GetUtcNow();
+            var mapping = tenantId is { } id
+                ? UrlMapping.CreateManaged(normalizedUrl, code, id, now)
+                : UrlMapping.CreateGuest(normalizedUrl, code, now);
+            if (await _repository.TryAddAsync(mapping, cancellationToken)) return mapping;
+            if (custom) throw new ShortCodeConflictException();
         }
-
-        var existingByCode = await _repository.GetByShortCodeAsync(finalShortCode, cancellationToken);
-        if (existingByCode is not null)
-        {
-            throw new InvalidOperationException($"The short code '{finalShortCode}' is already in use.");
-        }
-
-        var mapping = UrlMapping.Create(normalizedUrl, finalShortCode);
-        await _repository.SaveAsync(mapping, cancellationToken);
-        return mapping;
+        throw new InvalidOperationException("Could not allocate a unique short code. Try again.");
     }
 
     public async Task<UrlMapping?> ResolveAsync(string shortCode, CancellationToken cancellationToken = default)
     {
-        var mapping = await _repository.GetByShortCodeAsync(shortCode, cancellationToken);
-        if (mapping is null)
-        {
-            return null;
-        }
-
-        mapping.RecordHit();
-        await _repository.SaveAsync(mapping, cancellationToken);
+        if (!UrlValidation.IsValidShortCode(shortCode)) return null;
+        var mapping = await _repository.GetByShortCodeAsync(shortCode.Trim(), cancellationToken);
+        if (mapping is null || mapping.IsExpired(_clock.GetUtcNow())) return null;
+        if (mapping.Mode == LinkMode.Managed)
+            await _repository.RecordManagedHitAsync(mapping, _clock.GetUtcNow(), cancellationToken);
         return mapping;
     }
 
-    public Task<UrlMapping?> GetByShortCodeAsync(string shortCode, CancellationToken cancellationToken = default)
+    public Task<UrlMapping?> GetManagedAsync(Guid tenantId, string shortCode, CancellationToken cancellationToken = default)
     {
-        return _repository.GetByShortCodeAsync(shortCode, cancellationToken);
+        if (tenantId == Guid.Empty) throw new ArgumentException("A valid tenant is required.", nameof(tenantId));
+        if (!UrlValidation.IsValidShortCode(shortCode)) return Task.FromResult<UrlMapping?>(null);
+        return _repository.GetManagedByShortCodeAsync(tenantId, shortCode.Trim(), cancellationToken);
     }
 
-    public Task<IReadOnlyCollection<UrlMapping>> GetAnalyticsAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyCollection<UrlMapping>> GetManagedAnalyticsAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
-        return _repository.GetAllAsync(cancellationToken);
+        if (tenantId == Guid.Empty) throw new ArgumentException("A valid tenant is required.", nameof(tenantId));
+        return _repository.GetManagedByTenantAsync(tenantId, cancellationToken);
     }
 
     private static string GenerateShortCode()
     {
-        var chars = new char[6];
-        for (var i = 0; i < chars.Length; i++)
-        {
-            chars[i] = AllowedChars[Random.Shared.Next(AllowedChars.Length)];
-        }
-
+        Span<char> chars = stackalloc char[8];
+        for (var i = 0; i < chars.Length; i++) chars[i] = AllowedChars[RandomNumberGenerator.GetInt32(AllowedChars.Length)];
         return new string(chars);
     }
 }

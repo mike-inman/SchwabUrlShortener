@@ -60,7 +60,7 @@ awk '/^Testing:$/ { print "Documentation:"; next } /^Documentation:$/ { print "T
 expect_failure "$test_dir/out-of-order.md" 'section out of order: documentation'
 
 sed 's|/Users/michaelinman/Repos/SchwabUrlShortener|/Users/michaelinman/Repos/OtherProject|' "$test_dir/valid.md" > "$test_dir/wrong-repo.md"
-expect_failure "$test_dir/wrong-repo.md" 'missing required section: working directory line'
+expect_failure "$test_dir/wrong-repo.md" 'working directory is not a registered repository worktree'
 
 sed 's/2026-10-12/{{DATE}}/' "$test_dir/valid.md" > "$test_dir/placeholder.md"
 expect_failure "$test_dir/placeholder.md" 'unfinished template placeholder'
