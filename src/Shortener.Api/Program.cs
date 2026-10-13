@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -12,6 +13,7 @@ using Shortener.Application;
 using Shortener.Application.Interfaces;
 using Shortener.Domain;
 using Shortener.Infrastructure;
+using Shortener.Shared;
 
 if (args.Contains("--healthcheck", StringComparer.Ordinal))
 {
@@ -31,7 +33,10 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
-ConfigureTrustedProxy(builder);
+var proxyTrustMode = ScaleoutHostConfiguration.ConfigureTrustedProxy(builder.Services, builder.Configuration);
+var migrationOnly = args.Contains("--migrate", StringComparer.Ordinal);
+var dataProtectionMode = migrationOnly ? "MigrationOnly" :
+    ScaleoutHostConfiguration.AddConfiguredDataProtection(builder.Services, builder.Configuration);
 
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton(TimeProvider.System);
@@ -119,6 +124,10 @@ builder.Services.AddAuthorization(options =>
 });
 
 var app = builder.Build();
+app.Logger.LogInformation("Scale-out configuration. DataProtectionMode={DataProtectionMode} ForwardedHeadersTrustMode={ForwardedHeadersTrustMode}", dataProtectionMode, proxyTrustMode);
+if (!migrationOnly)
+    _ = app.Services.GetRequiredService<Microsoft.AspNetCore.DataProtection.IDataProtectionProvider>()
+        .CreateProtector("startup-check").Protect("startup-check");
 // A real app registration is required. No demo tenant or identity is installed at runtime.
 if (string.IsNullOrWhiteSpace(app.Configuration["AzureAd:ClientId"]))
     throw new InvalidOperationException("AzureAd:ClientId must be configured with the Entra API app registration before starting the API.");
@@ -264,24 +273,6 @@ if (args.Contains("--migrate", StringComparer.Ordinal))
 }
 
 app.Run();
-
-static void ConfigureTrustedProxy(WebApplicationBuilder builder)
-{
-    var proxyHost = builder.Configuration["ForwardedHeaders:KnownProxyHost"];
-    if (string.IsNullOrWhiteSpace(proxyHost)) return;
-    var addresses = System.Net.Dns.GetHostAddresses(proxyHost);
-    if (addresses.Length == 0) throw new InvalidOperationException("The configured reverse proxy could not be resolved.");
-    builder.Services.Configure<ForwardedHeadersOptions>(options =>
-    {
-        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
-        options.ForwardLimit = 1;
-        options.KnownIPNetworks.Clear();
-        options.KnownProxies.Clear();
-        foreach (var address in addresses) options.KnownProxies.Add(address);
-        var publicUrl = builder.Configuration["PublicLinks:BaseUrl"];
-        if (Uri.TryCreate(publicUrl, UriKind.Absolute, out var uri)) options.AllowedHosts.Add(uri.Host);
-    });
-}
 
 static bool TryGetTenant(ClaimsPrincipal principal, HttpContext context, out Guid tenantId)
 {

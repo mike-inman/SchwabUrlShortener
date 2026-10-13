@@ -3,6 +3,13 @@
   <ItemGroup>
     <ProjectReference Include="..\Shortener.Application\Shortener.Application.csproj" />
     <PackageReference Include="Microsoft.Identity.Web" Version="4.16.0" />
+    <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.5.4" />
+    <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Keys" Version="1.6.4" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.7" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/ScaleoutHostConfiguration.cs" Link="ScaleoutHostConfiguration.cs" />
   </ItemGroup>
 
   <PropertyGroup>

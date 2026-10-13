@@ -723,6 +723,8 @@ public class ShortenerApiTests
         }
         protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
         {
+            builder.UseSetting("DataProtection:Mode", "Filesystem");
+            builder.UseSetting("DataProtection:ApplicationName", "Shortener.Api");
             var apiConnectionString = ConnectionString;
             if (_unavailableDatabase)
             {
@@ -732,6 +734,8 @@ public class ShortenerApiTests
             builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["AzureAd:ClientId"] = "11111111-1111-1111-1111-111111111111",
+                ["DataProtection:Mode"] = "Filesystem",
+                ["DataProtection:ApplicationName"] = "Shortener.Api",
                 ["ConnectionStrings:ShortenerDb"] = apiConnectionString,
                 ["ConnectionStrings:Redis"] = _unavailableRedis ? "127.0.0.1:1,abortConnect=false" : RedisConnectionString,
                 ["RedirectCache:Namespace"] = RedisNamespace

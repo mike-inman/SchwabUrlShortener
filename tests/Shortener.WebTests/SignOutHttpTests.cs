@@ -109,6 +109,9 @@ public sealed class SignOutHttpTests
             foreach (var setting in new Dictionary<string, string>
             {
                 ["Identity:Mode"] = "Customer",
+                ["DataProtection:Mode"] = "Filesystem",
+                ["DataProtection:ApplicationName"] = "Shortener.Web",
+                ["TokenCache:Mode"] = "InMemory",
                 ["AzureAd:ClientId"] = "11111111-1111-1111-1111-111111111111",
                 ["AzureAd:TenantId"] = "22222222-2222-2222-2222-222222222222",
                 ["AzureAd:Authority"] = "https://idp.example.test/tenant/v2.0",

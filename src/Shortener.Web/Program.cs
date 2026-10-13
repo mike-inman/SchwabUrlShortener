@@ -2,10 +2,13 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Identity.Web;
+using Shortener.Shared;
 using Shortener.Web.Components;
 using Shortener.Web.Services;
+using StackExchange.Redis;
 
 if (args.Contains("--healthcheck", StringComparer.Ordinal))
 {
@@ -30,7 +33,9 @@ var customerIdentity = string.Equals(identityMode, "Customer", StringComparison.
 
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
-ConfigureTrustedProxy(builder);
+var proxyTrustMode = ScaleoutHostConfiguration.ConfigureTrustedProxy(builder.Services, builder.Configuration);
+var dataProtectionMode = ScaleoutHostConfiguration.AddConfiguredDataProtection(builder.Services, builder.Configuration);
+var distributedCache = TokenCacheConfiguration.AddConfiguredTokenCache(builder.Services, builder.Configuration);
 
 var entraConfigured = !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:ClientId"])
     && !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:TenantId"])
@@ -40,9 +45,10 @@ var entraConfigured = !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:
 builder.Services.AddSingleton(new IdentityAvailability(entraConfigured, customerIdentity));
 if (entraConfigured)
 {
-    builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd")
-        .EnableTokenAcquisitionToCallDownstreamApi()
-        .AddInMemoryTokenCaches();
+    var tokens = builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd")
+        .EnableTokenAcquisitionToCallDownstreamApi();
+    if (distributedCache) tokens.AddDistributedTokenCaches();
+    else tokens.AddInMemoryTokenCaches();
     builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme,
         options => options.Scope.Add(builder.Configuration["ShortenerApi:Scope"]!));
     builder.Services.Configure<AuthenticationOptions>(options =>
@@ -78,6 +84,12 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 var app = builder.Build();
+app.Logger.LogInformation("Scale-out configuration. DataProtectionMode={DataProtectionMode} TokenCacheMode={TokenCacheMode} ForwardedHeadersTrustMode={ForwardedHeadersTrustMode}",
+    dataProtectionMode, distributedCache ? "Distributed" : "InMemory", proxyTrustMode);
+_ = app.Services.GetRequiredService<Microsoft.AspNetCore.DataProtection.IDataProtectionProvider>()
+    .CreateProtector("startup-check").Protect("startup-check");
+if (distributedCache)
+    await app.Services.GetRequiredService<IConnectionMultiplexer>().GetDatabase().PingAsync();
 if (!ShortenerApiAddress.TryResolve(app.Configuration, out _, out var apiAddressReason))
     app.Logger.LogWarning("Shortener API base address rejected. Reason={Reason}. Web readiness will fail.", apiAddressReason);
 
@@ -156,21 +168,3 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 app.Run();
-
-static void ConfigureTrustedProxy(WebApplicationBuilder builder)
-{
-    var proxyHost = builder.Configuration["ForwardedHeaders:KnownProxyHost"];
-    if (string.IsNullOrWhiteSpace(proxyHost)) return;
-    var addresses = System.Net.Dns.GetHostAddresses(proxyHost);
-    if (addresses.Length == 0) throw new InvalidOperationException("The configured reverse proxy could not be resolved.");
-    builder.Services.Configure<ForwardedHeadersOptions>(options =>
-    {
-        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
-        options.ForwardLimit = 1;
-        options.KnownIPNetworks.Clear();
-        options.KnownProxies.Clear();
-        foreach (var address in addresses) options.KnownProxies.Add(address);
-        var publicUrl = builder.Configuration["PublicLinks:BaseUrl"];
-        if (Uri.TryCreate(publicUrl, UriKind.Absolute, out var uri)) options.AllowedHosts.Add(uri.Host);
-    });
-}
