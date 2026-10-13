@@ -1,0 +1,254 @@
+<title>Ziplio Insights</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1/dist/apexcharts.min.js"></script>
+<style>
+/* Layout: the per-link Insights page as it would sit in the app. Header with the
+   link, range tabs, four stat tiles, hero clicks chart, then referrers, devices,
+   and a peak-hours heatmap; a links-table sparkline row at the end. Single dark look. */
+:root {
+  --zl-midnight: #0B1426; --zl-ink: #070D1A; --zl-slate: #182941; --zl-raised: #20355A;
+  --zl-line: #2A3F63; --zl-mint: #59E6CF; --zl-amber: #F2BC68; --zl-cloud: #F4F8FF; --zl-muted: #9DB0CB;
+  --zl-mint-rgb: 89, 230, 207; --zl-amber-rgb: 242, 188, 104;
+  --zl-font-display: "Bricolage Grotesque", "Instrument Sans", system-ui, sans-serif;
+  --zl-font-ui: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --zl-font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+html, body { background: var(--zl-midnight); color: var(--zl-cloud); }
+body { font-family: var(--zl-font-ui); line-height: 1.55; padding-inline: 16px; -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(60rem 36rem at 8% -12%, rgba(var(--zl-mint-rgb), .12), transparent 62%),
+    radial-gradient(circle at 1px 1px, rgba(244,248,255,.06) 1px, transparent 1.2px) 0 0 / 28px 28px,
+    var(--zl-midnight); }
+.wrap { max-width: 1120px; margin-inline: auto; padding-block: 28px 64px; display: grid; gap: 22px; }
+.note { font-family: var(--zl-font-mono); font-size: 12px; color: var(--zl-muted); margin: 0; }
+.note b { color: var(--zl-amber); font-weight: 500; }
+.crumbs { font-size: 14px; color: var(--zl-muted); margin: 0; }
+.crumbs a { color: var(--zl-muted); text-decoration: none; } .crumbs a:hover { color: var(--zl-cloud); }
+.head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.head-main { display: grid; gap: 8px; min-width: 0; }
+.eyebrow { font-family: var(--zl-font-mono); font-size: 12px; letter-spacing: .06em; color: var(--zl-mint); margin: 0; display: flex; align-items: center; gap: 8px; }
+.eyebrow::before { content: ""; width: 22px; height: 1px; background: currentColor; }
+h1 { font-family: var(--zl-font-display); font-weight: 700; letter-spacing: -.03em; font-size: clamp(2rem, 1.4rem + 2.2vw, 3rem); line-height: 1; margin: 0; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.code { font-family: var(--zl-font-mono); font-weight: 500; letter-spacing: -.02em; }
+.code::before { content: ""; display: inline-block; width: .32em; height: .32em; border-radius: 50%; background: var(--zl-amber); box-shadow: 0 0 12px rgba(var(--zl-amber-rgb), .9); margin-right: .3em; vertical-align: .18em; }
+.dest { font-family: var(--zl-font-mono); font-size: 13px; color: var(--zl-muted); overflow-wrap: anywhere; margin: 0; }
+.tabs { display: inline-flex; padding: 4px; border-radius: 12px; background: var(--zl-ink); border: 1px solid var(--zl-line); gap: 2px; }
+.tabs button { font: 600 13px var(--zl-font-ui); color: var(--zl-muted); background: transparent; border: 0; padding: 8px 14px; border-radius: 9px; cursor: pointer; }
+.tabs button[aria-pressed="true"] { background: var(--zl-mint); color: var(--zl-midnight); box-shadow: 0 6px 18px -8px rgba(var(--zl-mint-rgb), .9); }
+.tabs button:focus-visible { outline: 2px solid var(--zl-mint); outline-offset: 2px; }
+.panel { background: linear-gradient(var(--zl-slate), var(--zl-slate)) padding-box, linear-gradient(135deg, rgba(var(--zl-mint-rgb), .5), rgba(42,63,99,.9) 38%, rgba(42,63,99,.5)) border-box;
+  border: 1px solid transparent; border-radius: 20px; box-shadow: 0 24px 60px -32px rgba(0,0,0,.75); padding: 20px 22px; min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.tile { display: grid; gap: 6px; }
+.tile .label { font-size: 11.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--zl-muted); }
+.tile .value { font-family: var(--zl-font-display); font-weight: 700; font-size: 2.1rem; letter-spacing: -.03em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.tile .sub { font-size: 13px; color: var(--zl-muted); }
+.up { color: var(--zl-mint); font-weight: 600; } .down { color: #FF8A94; font-weight: 600; }
+.live { display: inline-flex; align-items: center; gap: 8px; }
+.live::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--zl-amber); animation: pulse 2.4s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(var(--zl-amber-rgb), .6); } 60% { box-shadow: 0 0 0 8px rgba(var(--zl-amber-rgb), 0); } }
+.panel h2 { font-family: var(--zl-font-display); font-weight: 700; font-size: 1.2rem; letter-spacing: -.02em; margin: 0; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.panel-head span { font-size: 13px; color: var(--zl-muted); }
+.grid2 { display: grid; grid-template-columns: 1.25fr 1fr; gap: 14px; }
+.chart { min-height: 260px; }
+#clicks { min-height: 320px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { font-size: 11.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--zl-muted); text-align: left; padding: 10px 10px; border-bottom: 1px solid var(--zl-line); }
+td { padding: 12px 10px; border-bottom: 1px solid var(--zl-line); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+td.c { font-family: var(--zl-font-mono); color: var(--zl-mint); font-weight: 500; }
+td.d { color: var(--zl-muted); font-size: 13.5px; overflow-wrap: anywhere; }
+.spark { width: 120px; height: 34px; }
+.table-scroll { overflow-x: auto; }
+.legend-note { font-size: 12.5px; color: var(--zl-muted); margin: 6px 0 0; }
+.apexcharts-tooltip { box-shadow: 0 16px 40px -16px rgba(0,0,0,.9) !important; }
+@media (max-width: 860px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid2 { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .live::before { animation: none; } }
+</style>
+
+<div class="wrap">
+  <p class="note"><b>Example data.</b> Preview of the per-link Insights page. Charts use ApexCharts, the library behind Blazor-ApexCharts, with the Ziplio theme.</p>
+  <p class="crumbs"><a href="#links">My links</a> / launch</p>
+  <div class="head">
+    <div class="head-main">
+      <p class="eyebrow">Ziplio Insights</p>
+      <h1><span class="code">ziplio.io/launch</span></h1>
+      <p class="dest">→ https://www.example.com/campaigns/2026/autumn-launch?utm_source=newsletter</p>
+    </div>
+    <div class="tabs" role="group" aria-label="Time range">
+      <button type="button" data-range="24h" aria-pressed="false">24 hours</button>
+      <button type="button" data-range="7d" aria-pressed="true">7 days</button>
+      <button type="button" data-range="30d" aria-pressed="false">30 days</button>
+    </div>
+  </div>
+
+  <div class="tiles">
+    <div class="panel tile"><span class="label">Clicks</span><span class="value" id="t-clicks">0</span><span class="sub"><span id="t-trend" class="up"></span> vs previous period</span></div>
+    <div class="panel tile"><span class="label">Unique visitors</span><span class="value" id="t-unique">0</span><span class="sub">Estimated, no raw IPs stored</span></div>
+    <div class="panel tile"><span class="label">Busiest hour</span><span class="value" id="t-peak">7 PM</span><span class="sub" id="t-peak-sub">Thursdays</span></div>
+    <div class="panel tile"><span class="label">Last click</span><span class="value live">2 min</span><span class="sub">ago, from LinkedIn on mobile</span></div>
+  </div>
+
+  <section class="panel" aria-labelledby="clicks-h">
+    <div class="panel-head"><h2 id="clicks-h">Clicks over time</h2><span id="clicks-sub">Daily, last 7 days</span></div>
+    <div id="clicks" class="chart"></div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel" aria-labelledby="ref-h">
+      <div class="panel-head"><h2 id="ref-h">Top referrers</h2><span>Share of clicks</span></div>
+      <div id="refs" class="chart"></div>
+    </section>
+    <section class="panel" aria-labelledby="dev-h">
+      <div class="panel-head"><h2 id="dev-h">Devices</h2><span>Bots excluded</span></div>
+      <div id="devices" class="chart"></div>
+    </section>
+  </div>
+
+  <section class="panel" aria-labelledby="heat-h">
+    <div class="panel-head"><h2 id="heat-h">When your audience clicks</h2><span>Clicks by weekday and hour, your local time</span></div>
+    <div id="heat" class="chart"></div>
+  </section>
+
+  <section class="panel" id="links" aria-labelledby="links-h">
+    <div class="panel-head"><h2 id="links-h">In the links table: 7-day sparklines</h2><span>Inline SVG, no chart library needed</span></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Short link</th><th>Destination</th><th>Last 7 days</th><th>Clicks</th></tr></thead>
+      <tbody id="spark-rows"></tbody>
+    </table></div>
+  </section>
+</div>
+
+<script>
+(function () {
+  // Deterministic example data so the preview is stable.
+  var seed = 7;
+  function rnd() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+  var hourShape = [2,1,1,1,1,2,4,7,9,10,9,9,10,9,8,8,9,11,14,16,14,11,7,4];
+  var dayShape = [0.8,1.0,1.05,1.1,1.25,0.9,0.7]; // Mon..Sun
+  var now = new Date(2026, 9, 13, 14, 0, 0);
+  function hourly(n) { var out = []; for (var i = n - 1; i >= 0; i--) {
+    var t = new Date(now.getTime() - i * 3600e3); var dow = (t.getDay() + 6) % 7;
+    var v = Math.round(hourShape[t.getHours()] * dayShape[dow] * (0.7 + rnd() * 0.6) * 1.6 * (1 + (n - i) / n * 0.4));
+    out.push([t.getTime(), v]); } return out; }
+  var all = hourly(60 * 24);
+  function bucket(days) { var out = [], map = {};
+    all.slice(-days * 24).forEach(function (p) { var d = new Date(p[0]); d.setHours(0,0,0,0); var k = d.getTime(); map[k] = (map[k] || 0) + p[1]; });
+    Object.keys(map).sort().forEach(function (k) { out.push([+k, map[k]]); }); return out; }
+  var prevTotal = function (days) { return all.slice(-days * 48, -days * 24).reduce(function (s, p) { return s + p[1]; }, 0); };
+  var ranges = {
+    '24h': { data: all.slice(-24), sub: 'Hourly, last 24 hours', fmt: 'h TT', prev: all.slice(-48, -24).reduce(function (s, p) { return s + p[1]; }, 0) },
+    '7d': { data: bucket(7), sub: 'Daily, last 7 days', fmt: 'ddd d', prev: prevTotal(7) },
+    '30d': { data: bucket(30), sub: 'Daily, last 30 days', fmt: 'MMM d', prev: prevTotal(30) }
+  };
+
+  var C = { mint: '#59E6CF', amber: '#F2BC68', cloud: '#F4F8FF', muted: '#9DB0CB', line: '#2A3F63', slate: '#182941', raised: '#3A5680' };
+  var base = {
+    chart: { background: 'transparent', foreColor: C.muted, fontFamily: '"Instrument Sans", system-ui, sans-serif', toolbar: { show: false }, zoom: { enabled: false },
+      animations: { enabled: true, easing: 'easeinout', speed: 900, animateGradually: { enabled: true, delay: 60 }, dynamicAnimation: { enabled: true, speed: 450 } } },
+    theme: { mode: 'dark' }, grid: { borderColor: 'rgba(42,63,99,.7)', strokeDashArray: 4, padding: { left: 6, right: 10 } },
+    tooltip: { theme: 'dark' }, dataLabels: { enabled: false }
+  };
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) base.chart.animations.enabled = false;
+  function merge(o) { return Object.assign({}, base, o, { chart: Object.assign({}, base.chart, o.chart || {}) }); }
+
+  var clicks = new ApexCharts(document.getElementById('clicks'), merge({
+    chart: { type: 'area', height: 320 },
+    series: [{ name: 'Clicks', data: ranges['7d'].data }],
+    stroke: { curve: 'smooth', width: 2.6, colors: [C.mint] },
+    colors: [C.mint],
+    fill: { type: 'gradient', gradient: { shadeIntensity: 0, opacityFrom: .38, opacityTo: 0, stops: [0, 95] } },
+    markers: { size: 0, strokeColors: C.slate, strokeWidth: 3, hover: { size: 6 } },
+    xaxis: { type: 'datetime', labels: { datetimeUTC: false, style: { colors: C.muted } }, axisBorder: { show: false }, axisTicks: { show: false } },
+    yaxis: { labels: { style: { colors: C.muted }, formatter: function (v) { return Math.round(v); } }, min: 0, forceNiceScale: true },
+    tooltip: { theme: 'dark', x: { format: 'ddd, MMM d' } }
+  }));
+  clicks.render();
+
+  var refs = new ApexCharts(document.getElementById('refs'), merge({
+    chart: { type: 'bar', height: 260 },
+    series: [{ name: 'Clicks', data: [612, 341, 188, 97, 46] }],
+    plotOptions: { bar: { horizontal: true, barHeight: '58%', borderRadius: 6, borderRadiusApplication: 'end', distributed: true } },
+    colors: [C.mint, 'rgba(89,230,207,.78)', 'rgba(89,230,207,.58)', 'rgba(89,230,207,.42)', 'rgba(89,230,207,.28)'],
+    legend: { show: false },
+    xaxis: { categories: ['LinkedIn', 'Direct', 'Email', 'X', 'Other'], labels: { style: { colors: C.muted } }, axisBorder: { show: false }, axisTicks: { show: false } },
+    yaxis: { labels: { style: { colors: C.cloud, fontSize: '13px' } } },
+    grid: { borderColor: 'rgba(42,63,99,.7)', strokeDashArray: 4, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
+    dataLabels: { enabled: true, textAnchor: 'start', offsetX: 6, style: { colors: [C.cloud], fontFamily: '"JetBrains Mono", monospace', fontWeight: 500 }, dropShadow: { enabled: false } }
+  }));
+  refs.render();
+
+  var devices = new ApexCharts(document.getElementById('devices'), merge({
+    chart: { type: 'donut', height: 260 },
+    series: [62, 33, 5], labels: ['Mobile', 'Desktop', 'Tablet'],
+    colors: [C.mint, '#7C93B8', C.raised],
+    stroke: { width: 3, colors: [C.slate] },
+    legend: { position: 'bottom', labels: { colors: C.muted }, markers: { radius: 12 } },
+    plotOptions: { pie: { donut: { size: '72%', labels: { show: true,
+      name: { color: C.muted, fontSize: '13px' },
+      value: { color: C.cloud, fontSize: '28px', fontFamily: '"Bricolage Grotesque", sans-serif', fontWeight: 700, formatter: function (v) { return v + '%'; } },
+      total: { show: true, label: 'Mobile', color: C.muted, formatter: function () { return '62%'; } } } } } },
+    tooltip: { theme: 'dark', y: { formatter: function (v) { return v + '%'; } } }
+  }));
+  devices.render();
+
+  var days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  var heatSeries = days.map(function (d, di) { return { name: d, data: hourShape.map(function (h, hi) {
+    var label = (hi % 12 || 12) + (hi < 12 ? 'a' : 'p'); return { x: label, y: Math.round(h * dayShape[di] * (0.75 + rnd() * 0.5) * 2) }; }) }; }).reverse();
+  var heat = new ApexCharts(document.getElementById('heat'), merge({
+    chart: { type: 'heatmap', height: 300 },
+    series: heatSeries,
+    plotOptions: { heatmap: { radius: 4, enableShades: false, colorScale: { ranges: [
+      { from: 0, to: 8, color: '#14223B', name: 'Quiet' }, { from: 9, to: 18, color: '#1C4558', name: 'Low' },
+      { from: 19, to: 31, color: '#2A7F7C', name: 'Busy' }, { from: 32, to: 999, color: C.mint, name: 'Peak' } ] } } },
+    stroke: { width: 2, colors: [C.slate] },
+    legend: { position: 'bottom', labels: { colors: C.muted } },
+    xaxis: { labels: { style: { colors: C.muted, fontSize: '11px' } }, axisBorder: { show: false }, axisTicks: { show: false }, tickAmount: 12 },
+    yaxis: { labels: { style: { colors: C.muted } } }
+  }));
+  heat.render();
+
+  // Sparklines: plain SVG, the way the Razor table would draw them.
+  var rows = [
+    ['launch', 'https://www.example.com/campaigns/2026/autumn-launch', [120,160,150,210,260,190,240]],
+    ['spring-menu', 'https://www.example.com/menus/spring-2026.pdf', [90,85,96,80,70,64,58]],
+    ['q4-webinar', 'https://events.example.com/webinars/q4-planning', [10,14,30,60,110,170,220]],
+    ['hiring', 'https://careers.example.com/openings/platform-engineer', [0,0,2,1,0,3,1]]
+  ];
+  var tb = document.getElementById('spark-rows');
+  rows.forEach(function (r) {
+    var v = r[2], max = Math.max.apply(null, v) || 1, w = 120, h = 34, pad = 3;
+    var pts = v.map(function (y, i) { return [pad + i * (w - 2 * pad) / (v.length - 1), h - pad - (y / max) * (h - 2 * pad)]; });
+    var d = pts.map(function (p, i) { return (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1); }).join(' ');
+    var area = d + ' L' + pts[pts.length - 1][0].toFixed(1) + ' ' + (h - pad) + ' L' + pad + ' ' + (h - pad) + ' Z';
+    var last = pts[pts.length - 1], rising = v[v.length - 1] >= v[0];
+    var col = rising ? '#59E6CF' : '#7C93B8';
+    var total = v.reduce(function (s, x) { return s + x; }, 0);
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td class="c">' + r[0] + '</td><td class="d">' + r[1] + '</td><td><svg class="spark" viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="7-day trend ' + (rising ? 'rising' : 'falling') + '">' +
+      '<path d="' + area + '" fill="' + col + '" fill-opacity=".14"/><path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>' +
+      '<circle cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="3" fill="' + col + '"/></svg></td><td>' + total.toLocaleString() + '</td>';
+    tb.appendChild(tr);
+  });
+
+  function setRange(key) {
+    var r = ranges[key], total = r.data.reduce(function (s, p) { return s + p[1]; }, 0);
+    var change = r.prev ? Math.round((total - r.prev) / r.prev * 100) : 0;
+    document.getElementById('t-clicks').textContent = total.toLocaleString();
+    document.getElementById('t-unique').textContent = Math.round(total * 0.72).toLocaleString();
+    var trend = document.getElementById('t-trend');
+    trend.textContent = (change >= 0 ? '▲ ' : '▼ ') + Math.abs(change) + '%';
+    trend.className = change >= 0 ? 'up' : 'down';
+    document.getElementById('clicks-sub').textContent = r.sub;
+    clicks.updateOptions({ tooltip: { x: { format: key === '24h' ? 'ddd h TT' : 'ddd, MMM d' } } }, false, false);
+    clicks.updateSeries([{ name: 'Clicks', data: r.data }]);
+    document.querySelectorAll('.tabs button').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.range === key)); });
+  }
+  document.querySelectorAll('.tabs button').forEach(function (b) { b.addEventListener('click', function () { setRange(b.dataset.range); }); });
+  setRange('7d');
+})();
+</script>
