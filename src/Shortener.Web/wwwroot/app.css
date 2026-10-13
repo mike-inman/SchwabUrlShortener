@@ -103,6 +103,9 @@ header {
 }
 .site-nav .brand svg { width: 2rem; height: 2rem; flex: none; }
 .site-nav .brand:hover { text-decoration: none; color: #FFFFFF; }
+.site-nav.has-workspaces .brand { margin-right: 0; }
+.workspace-switcher { max-width: 12rem; margin-right: auto; }
+.workspace-switcher .form-select { width: auto; max-width: 12rem; padding: .35rem 2rem .35rem .7rem; font-size: .85rem; }
 .site-nav a:not(.brand), .nav-button {
   position: relative;
   color: var(--zl-muted);
@@ -131,6 +134,7 @@ header {
 
 /* ---------- Page frame ---------- */
 main.container { max-width: 1120px; padding-top: 3rem; padding-bottom: 5rem; }
+.workspace-caption { margin: .35rem 0 .75rem; font-size: .875rem; }
 article > section { margin-top: 2.75rem; }
 
 /* Glow-edged panel: slate fill, 1px gradient rim brightest at the top-left. */

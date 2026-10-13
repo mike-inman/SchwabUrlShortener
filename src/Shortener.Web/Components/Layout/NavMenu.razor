@@ -1,6 +1,9 @@
+@rendermode InteractiveServer
+@implements IDisposable
 @inject IdentityAvailability Identity
+@inject WorkspaceNavigationState WorkspaceNavigation
 
-<nav aria-label="Main navigation" class="site-nav">
+<nav aria-label="Main navigation" class="site-nav @(WorkspaceNavigation.Workspaces.Count > 1 ? "has-workspaces" : null)">
     <a class="brand" href="/" aria-label="@($"{BrandText.Name} home")">
         <svg viewBox="0 0 48 48" aria-hidden="true">
             <circle cx="9" cy="13" r="3.4" fill="none" stroke="#59E6CF" stroke-width="2.6"/>
@@ -9,6 +12,18 @@
         </svg>
         <span>@BrandText.Name.ToLowerInvariant()</span>
     </a>
+    @if (Identity.Customer && WorkspaceNavigation.Workspaces.Count > 1)
+    {
+        <div class="workspace-switcher">
+            <label class="visually-hidden" for="workspace-select">Workspace</label>
+            <select id="workspace-select" class="form-select" aria-label="Workspace" value="@WorkspaceNavigation.SelectedId" @onchange="SelectWorkspaceAsync">
+                @foreach (var workspace in WorkspaceNavigation.Workspaces)
+                {
+                    <option value="@workspace.Id">@workspace.Name</option>
+                }
+            </select>
+        </div>
+    }
     <NavLink href="/" Match="NavLinkMatch.All">Guest link</NavLink>
     @if (Identity.Configured)
     {
@@ -21,3 +36,17 @@
         </AuthorizeView>
     }
 </nav>
+
+@code {
+    protected override void OnInitialized() => WorkspaceNavigation.Changed += Refresh;
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task SelectWorkspaceAsync(ChangeEventArgs args)
+    {
+        if (Guid.TryParse(args.Value?.ToString(), out var id))
+            await WorkspaceNavigation.SelectAsync(id);
+    }
+
+    public void Dispose() => WorkspaceNavigation.Changed -= Refresh;
+}

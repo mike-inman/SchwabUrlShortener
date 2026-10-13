@@ -39,6 +39,7 @@ else
 builder.Services.AddAuthorization();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<WorkspaceNavigationState>();
 builder.Services.AddHttpClient<IShortenerApiClient, ShortenerApiClient>();
 builder.Services.AddHttpClient("availability", client => client.Timeout = TimeSpan.FromSeconds(3));
 builder.Services.AddRazorComponents()

@@ -6,6 +6,7 @@
 @inject ILogger<Dashboard> Logger
 @inject IdentityAvailability Identity
 @inject NavigationManager Navigation
+@inject WorkspaceNavigationState WorkspaceNavigation
 
 <PageTitle>My links · @BrandText.TitleSuffix</PageTitle>
 @if (notice is not null)
@@ -21,6 +22,10 @@
     </div>
 }
 <h1>My links</h1>
+@if (Identity.Customer && workspaces?.Count == 1)
+{
+    <p class="workspace-caption muted">@workspaces[0].Name workspace</p>
+}
 <p class="lead">Create persistent links for your @(Identity.Customer ? "workspace" : "signed-in organization") and review redirect counts.</p>
 
 @if (!Identity.Configured)
@@ -29,16 +34,6 @@
 }
 else
 {
-    @if (Identity.Customer && workspaces is not null)
-    {
-        <label for="workspace-select">Workspace</label>
-        <select id="workspace-select" class="form-select" value="@workspaceId" @onchange="SelectWorkspaceAsync">
-            @foreach (var workspace in workspaces)
-            {
-                <option value="@workspace.Id">@workspace.Name</option>
-            }
-        </select>
-    }
     <section>
         <h2>Create a managed link</h2>
         <EditForm Model="form" OnSubmit="CreateAsync" FormName="managed-link" class="link-form">
@@ -188,6 +183,7 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        WorkspaceNavigation.Clear(SelectWorkspaceAsync);
         await liveCancellation.CancelAsync();
         if (liveTask is not null)
         {
@@ -211,6 +207,7 @@ else
                 workspaces = await Api.GetWorkspacesAsync(user);
                 workspaceId = workspaces.FirstOrDefault(x => x.Kind == 0)?.Id ?? workspaces.FirstOrDefault()?.Id;
                 if (workspaceId is null) throw new ShortenerApiException("No workspace is available for this account.");
+                WorkspaceNavigation.Configure(workspaces, workspaceId.Value, SelectWorkspaceAsync);
             }
             links = await GetLinksAsync(user);
         }
@@ -269,14 +266,15 @@ else
             ? Api.GetWorkspaceManagedLinksAsync(workspaceId!.Value, user, cancellationToken)
             : Api.GetManagedLinksAsync(user, cancellationToken);
 
-    private async Task SelectWorkspaceAsync(ChangeEventArgs args)
+    private Task SelectWorkspaceAsync(Guid selectedId) => InvokeAsync(async () =>
     {
-        if (!Guid.TryParse(args.Value?.ToString(), out var selectedId) ||
-            workspaces?.Any(x => x.Id == selectedId) != true) return;
+        if (workspaces?.Any(x => x.Id == selectedId) != true || workspaceId == selectedId) return;
         workspaceId = selectedId;
         selected = null;
+        WorkspaceNavigation.SetSelected(selectedId);
         await LoadLinksAsync();
-    }
+        StateHasChanged();
+    });
 
     private async Task LoadLinksAsync()
     {

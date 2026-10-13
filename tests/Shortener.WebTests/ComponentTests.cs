@@ -178,11 +178,57 @@ public sealed class ComponentTests : BunitContext
         Assert.EndsWith("/dashboard", navigation.Uri);
     }
 
-    private FakeApi Setup()
+    [Fact]
+    public void One_workspace_shows_name_under_title_without_a_select()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup(customer: true);
+        var personal = new WorkspaceSummary(Guid.NewGuid(), "Personal", 0);
+        api.Workspaces = _ => Task.FromResult<IReadOnlyList<WorkspaceSummary>>([personal]);
+        api.WorkspaceList = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([]);
+
+        var navigation = Render<NavMenu>();
+        var dashboard = Render<Dashboard>();
+
+        dashboard.WaitForAssertion(() => Assert.Equal("Personal workspace", dashboard.Find(".workspace-caption").TextContent));
+        Assert.Empty(navigation.FindAll("#workspace-select"));
+        Assert.Empty(dashboard.FindAll("#workspace-select"));
+        Assert.Equal(personal.Id, Assert.Single(api.WorkspaceReads));
+    }
+
+    [Fact]
+    public async Task Multiple_workspaces_show_nav_switcher_and_load_selected_workspace()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup(customer: true);
+        var personal = new WorkspaceSummary(Guid.NewGuid(), "Personal", 0);
+        var team = new WorkspaceSummary(Guid.NewGuid(), "Team", 1);
+        api.Workspaces = _ => Task.FromResult<IReadOnlyList<WorkspaceSummary>>([personal, team]);
+        api.WorkspaceList = id => Task.FromResult<IReadOnlyList<ManagedLink>>(
+            id == team.Id ? [Managed with { ShortCode = "team" }] : [Managed]);
+
+        var navigation = Render<NavMenu>();
+        var dashboard = Render<Dashboard>();
+
+        navigation.WaitForAssertion(() => Assert.Single(navigation.FindAll("#workspace-select")));
+        Assert.Contains("workspace-switcher", navigation.Find("a.brand").NextElementSibling?.ClassName);
+        Assert.Empty(dashboard.FindAll("#workspace-select"));
+        Assert.Empty(dashboard.FindAll(".workspace-caption"));
+        Assert.Equal(personal.Id, Assert.Single(api.WorkspaceReads));
+
+        await navigation.Find("#workspace-select").ChangeAsync(team.Id.ToString());
+        dashboard.WaitForAssertion(() => Assert.Contains("team", dashboard.Find("tbody").TextContent));
+        Assert.Equal(team.Id, api.WorkspaceReads.Last());
+    }
+
+    private FakeApi Setup(bool customer = false)
     {
         var api = new FakeApi();
         Services.AddSingleton<IShortenerApiClient>(api);
-        Services.AddSingleton(new IdentityAvailability(true));
+        Services.AddSingleton(new IdentityAvailability(true, customer));
+        Services.AddSingleton(new WorkspaceNavigationState());
         Services.AddSingleton(NullLogger<Home>.Instance);
         Services.AddSingleton(NullLogger<Dashboard>.Instance);
         return api;
@@ -194,6 +240,9 @@ public sealed class ComponentTests : BunitContext
         public Func<CreateLinkRequest, Task<LinkResult>> ManagedCreate { get; set; } = _ => throw new NotImplementedException();
         public Func<ClaimsPrincipal, Task<IReadOnlyList<ManagedLink>>> List { get; set; } = _ => throw new NotImplementedException();
         public Func<string, Task<ManagedLink>> Analytics { get; set; } = _ => throw new NotImplementedException();
+        public Func<ClaimsPrincipal, Task<IReadOnlyList<WorkspaceSummary>>> Workspaces { get; set; } = _ => throw new NotImplementedException();
+        public Func<Guid, Task<IReadOnlyList<ManagedLink>>> WorkspaceList { get; set; } = _ => throw new NotImplementedException();
+        public List<Guid> WorkspaceReads { get; } = [];
         public int AuthenticatedCalls { get; private set; }
         public Task<LinkResult> CreateGuestAsync(CreateLinkRequest request, CancellationToken cancellationToken = default) => Guest(request);
         public Task<LinkResult> CreateManagedAsync(CreateLinkRequest request, ClaimsPrincipal user, CancellationToken cancellationToken = default)
@@ -204,6 +253,10 @@ public sealed class ComponentTests : BunitContext
         { Assert.True(user.Identity?.IsAuthenticated); AuthenticatedCalls++; return Task.FromResult(Managed); }
         public Task<ManagedLink> GetManagedAnalyticsAsync(string shortCode, ClaimsPrincipal user, CancellationToken cancellationToken = default)
         { Assert.True(user.Identity?.IsAuthenticated); AuthenticatedCalls++; return Analytics(shortCode); }
+        public Task<IReadOnlyList<WorkspaceSummary>> GetWorkspacesAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        { Assert.True(user.Identity?.IsAuthenticated); return Workspaces(user); }
+        public Task<IReadOnlyList<ManagedLink>> GetWorkspaceManagedLinksAsync(Guid workspaceId, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        { Assert.True(user.Identity?.IsAuthenticated); WorkspaceReads.Add(workspaceId); return WorkspaceList(workspaceId); }
         public Uri PublicUrl(string shortCode) => new("https://api.example.test/r/" + shortCode);
     }
 }
