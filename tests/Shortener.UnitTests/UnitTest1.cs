@@ -102,7 +102,7 @@ public class UrlShortenerServiceTests
     }
 
     [Fact]
-    public async Task CacheHitSkipsMappingReadButRecordsManagedHit()
+    public async Task CacheHitSkipsMappingReadButCapturesManagedClick()
     {
         var repo = new TestRepository();
         var cache = new TestCache();
@@ -111,8 +111,8 @@ public class UrlShortenerServiceTests
         var managed = await service.CreateManagedAsync(tenant, "example.com", "manage123");
         Assert.Equal(managed.Id, (await service.ResolveAsync("MANAGE123"))?.Id);
         Assert.Equal(0, repo.MappingReads);
-        Assert.Equal(1, managed.HitCount);
-        Assert.Equal(1, repo.ManagedHitWrites);
+        Assert.Equal(0, managed.HitCount);
+        Assert.Equal(1, repo.CapturedClicks);
         Assert.Equal(1, cache.SetCount);
     }
 
@@ -146,7 +146,7 @@ public class UrlShortenerServiceTests
         clock.Advance(TimeSpan.FromTicks(1));
         Assert.Null(await service.ResolveAsync("guest123"));
         Assert.Equal(0, repo.MappingReads);
-        Assert.Equal(0, repo.ManagedHitWrites);
+        Assert.Equal(0, repo.CapturedClicks);
     }
 
     [Fact]
@@ -185,18 +185,18 @@ public class UrlShortenerServiceTests
     {
         private readonly Dictionary<string, UrlMapping> _items = new(StringComparer.OrdinalIgnoreCase);
         public int MappingReads { get; private set; }
-        public int ManagedHitWrites { get; private set; }
+        public int CapturedClicks { get; private set; }
         public Task<bool> TryAddAsync(UrlMapping item, CancellationToken cancellationToken = default) => Task.FromResult(_items.TryAdd(item.ShortCode, item));
         public Task<UrlMapping?> GetByShortCodeAsync(string code, CancellationToken cancellationToken = default) { MappingReads++; return Task.FromResult(_items.GetValueOrDefault(code)); }
         public Task<UrlMapping?> GetManagedByShortCodeAsync(Guid tenant, string code, CancellationToken cancellationToken = default) => Task.FromResult(_items.GetValueOrDefault(code) is { Mode: LinkMode.Managed } m && m.TenantId == tenant ? m : null);
         public Task<UrlMapping?> GetManagedByOriginalUrlAsync(Guid tenant, string url, CancellationToken cancellationToken = default) => Task.FromResult(_items.Values.FirstOrDefault(x => x.Mode == LinkMode.Managed && x.TenantId == tenant && x.OriginalUrl == url));
         public Task<IReadOnlyCollection<UrlMapping>> GetManagedByTenantAsync(Guid tenant, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<UrlMapping>>(_items.Values.Where(x => x.Mode == LinkMode.Managed && x.TenantId == tenant).ToArray());
-        public Task RecordManagedHitAsync(string mappingId, Guid tenantId, DateTimeOffset now, CancellationToken cancellationToken = default)
+        public Task<Guid> CaptureManagedClickAsync(string mappingId, Guid tenantId, DateTimeOffset now,
+            string? traceId, CancellationToken cancellationToken = default)
         {
-            var mapping = _items.Values.Single(x => x.Id == mappingId && x.TenantId == tenantId);
-            mapping.RecordManagedHit(now);
-            ManagedHitWrites++;
-            return Task.CompletedTask;
+            _ = _items.Values.Single(x => x.Id == mappingId && x.TenantId == tenantId);
+            CapturedClicks++;
+            return Task.FromResult(Guid.NewGuid());
         }
     }
 

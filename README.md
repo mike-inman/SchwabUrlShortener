@@ -1,15 +1,16 @@
 # Schwab URL Shortener Prototype
 
-Updated: 2026-10-13 00:44 CDT
+Updated: 2026-10-13 05:42 CDT
 
-This repository contains a .NET 10 URL shortener prototype. Anonymous guest links expire after seven days; Entra-authenticated managed links belong to the validated token's tenant. PostgreSQL stores links and managed redirect counts. Redis caches public redirect mappings. A Blazor Server app provides guest creation and a signed-in managed dashboard.
+This repository contains a .NET 10 URL shortener prototype. Anonymous guest links expire after seven days; Entra-authenticated managed links belong to the validated token's tenant. PostgreSQL stores links, managed click outbox events, and aggregate counts. Redis caches public redirect mappings. Kafka carries managed click events to the Analytics worker. A Blazor Server app provides guest creation and a signed-in managed dashboard.
 
 ## Architecture
 
 - Domain: `src/Shortener.Domain` — `UrlMapping`, validation helpers, and business rules.
 - Application: `src/Shortener.Application` — guest/managed creation, public resolution, and tenant-scoped management contracts.
-- Infrastructure: `src/Shortener.Infrastructure` — PostgreSQL repository, explicit EF Core migrations, database constraints, atomic managed hit updates, and disposable Redis redirect cache.
+- Infrastructure: `src/Shortener.Infrastructure` — PostgreSQL repository, explicit EF Core migrations, database constraints, durable managed click capture, and disposable Redis redirect cache.
 - API: `src/Shortener.Api` — anonymous guest and redirect routes plus authenticated managed routes.
+- Analytics: `src/Shortener.Analytics` — PostgreSQL outbox publisher, Kafka consumer, deduplication, and tenant-aware aggregate updates.
 - Web: `src/Shortener.Web` — Interactive Server UI that acquires delegated API tokens on the server and calls the API over HTTP.
 - Tests: `tests/Shortener.UnitTests`, `tests/Shortener.IntegrationTests`, and `tests/Shortener.WebTests` — domain, real PostgreSQL/API, and Web regression coverage.
 
@@ -24,7 +25,8 @@ This repository contains a .NET 10 URL shortener prototype. Anonymous guest link
 4. Configure `AzureAd__ClientId` with the API app registration's client ID. `AzureAd:TenantId` defaults to `organizations` for Entra work/school tenants. The API fails closed at startup if either the client ID or PostgreSQL connection string is missing. Managed routes require a delegated API access token with `access_as_user`; an ID token is insufficient.
 5. Provide `ConnectionStrings__Redis` through the environment or local secret store, pointing to a Redis instance accessible by the API. For a disposable loopback-only local instance, use a separate Redis container/port; do not reuse another project's Redis data. The optional `RedirectCache__Namespace` sets a safe ASCII key prefix; the default is `shortener:redirect:v1`. No Redis credential belongs in tracked settings.
 6. Run `dotnet run --project src/Shortener.Api/Shortener.Api.csproj`. `GET /health/live` reports process liveness; `GET /health/ready` checks PostgreSQL access/migrations and Redis availability, returning 503 when a dependency is unavailable. Redis outage still allows redirects through PostgreSQL, while readiness reports the degraded dependency.
-7. HTTP contract:
+7. Create a Kafka topic for managed clicks and set `Kafka__BootstrapServers`, `Kafka__Topic`, and `Kafka__ConsumerGroup` for the Analytics worker. Configure the same `ConnectionStrings__ShortenerDb` as the API, then run `dotnet run --project src/Shortener.Analytics/Shortener.Analytics.csproj`. The worker needs the Slice 5 migration before startup. A managed redirect commits an outbox row before returning 302; its analytics count updates after Kafka processing. If PostgreSQL capture fails, that redirect returns an error. Kafka downtime leaves the outbox queued for bounded retries; terminal rows require operator inspection and replay.
+8. HTTP contract:
    - `POST /api/urls/guest` with `{ "originalUrl": "https://example.com/articles/123", "shortCode": "demo1" }` creates an anonymous link with `expiresAtUtc` exactly seven days after creation. `shortCode` is optional.
    - `POST /api/urls/managed` accepts the same body and requires a valid Entra bearer access token. Tenant ownership comes from the validated token's `tid` claim.
    - `GET /r/{shortCode}` anonymously redirects active guest or managed links. Expired guest links return 404.
@@ -52,11 +54,11 @@ Run the solution test suite against a real, migrated PostgreSQL test database co
 
 `dotnet test SchwabUrlShortener.slnx --nologo`
 
-The current tests cover guest expiry, global code uniqueness and races, anonymous redirects, tenant isolation, authorization, restart persistence, concurrent managed analytics, cancellation, database constraints, Redis hit/miss/outage behavior, readiness failure, and Web components/API-client behavior. API tests use a test-only authentication handler. The integration tests clear the `url_mappings` table and accept only the disposable database `Schwab_test_local`. Never point them at the app database. Set `ConnectionStrings__Redis` to an isolated real Redis instance for those tests. See [the Slice 4 validation note](docs/2026-10-13-0044-slice-4-redis-implementation-validation.md) for local observations and remaining gaps.
+The current tests cover guest expiry, global code uniqueness and races, anonymous redirects, tenant isolation, authorization, restart persistence, managed click capture, Kafka publish retry/replay/deduplication, cancellation, database constraints, Redis hit/miss/outage behavior, readiness failure, and Web components/API-client behavior. API tests use a test-only authentication handler. The integration tests clear only the guarded disposable database `Schwab_test_local`; never point them at the app database. Set `ConnectionStrings__Redis` and `Kafka__BootstrapServers` to isolated real instances for those tests. See [the Slice 5 validation note](docs/2026-10-13-0542-slice-5-kafka-analytics-validation.md) for delivery and operator details.
 
 ## Notes
 
 - PostgreSQL is the only normal runtime repository. There is no in-memory fallback on connection failure.
-- Redis stores only redirect fields, with a maximum one-hour TTL. Guest TTL is shorter when required by its absolute seven-day expiry. Managed hits still update PostgreSQL on every redirect, including cache hits.
+- Redis stores only redirect fields, with a maximum one-hour TTL. Guest TTL is shorter when required by its absolute seven-day expiry. Managed redirects capture a PostgreSQL outbox event on every redirect, including cache hits. Aggregate counts are eventually updated by the Kafka consumer.
 - The short codes are validated to be 4-12 characters with letters and numbers only.
 - URLs are normalized to absolute `http` or `https` addresses when missing a scheme.

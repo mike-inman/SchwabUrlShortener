@@ -2,6 +2,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using System.Text.Json;
+using Confluent.Kafka;
+using Confluent.Kafka.Admin;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -9,8 +12,11 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Shortener.Analytics;
+using Shortener.Application;
 using Shortener.Application.Interfaces;
 using Shortener.Infrastructure;
 using StackExchange.Redis;
@@ -176,7 +182,14 @@ public class ShortenerApiTests
         Assert.Equal(HttpStatusCode.Conflict, (await anon.PostAsJsonAsync("/api/urls/guest", new { originalUrl = "other.example", shortCode = "manag123" })).StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, (await anon.GetAsync("/r/manag123")).StatusCode);
         var analytics = await a.GetFromJsonAsync<ManagedUrlResponse>("/api/urls/managed/manag123/analytics");
-        Assert.Equal(1, analytics!.HitCount);
+        Assert.Equal(0, analytics!.HitCount);
+        await using (var captured = new NpgsqlConnection(factory.ConnectionString))
+        {
+            await captured.OpenAsync();
+            await using var command = new NpgsqlCommand("SELECT count(*) FROM click_outbox WHERE short_code = 'manag123' AND tenant_id = @tenant", captured);
+            command.Parameters.AddWithValue("tenant", TenantA);
+            Assert.Equal(1L, (long)(await command.ExecuteScalarAsync())!);
+        }
         await using (var connection = new NpgsqlConnection(factory.ConnectionString))
         {
             await connection.OpenAsync();
@@ -242,7 +255,7 @@ public class ShortenerApiTests
     }
 
     [Fact]
-    public async Task ConcurrentManagedRedirectsAtomicallyUpdateAnalytics()
+    public async Task ConcurrentManagedRedirectsCaptureDistinctDurableEvents()
     {
         using var factory = new TestFactory();
         using var owner = ClientFor(factory, TenantA);
@@ -251,8 +264,100 @@ public class ShortenerApiTests
         var responses = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => publicClient.GetAsync("/r/manyhits")));
         Assert.All(responses, x => Assert.Equal(HttpStatusCode.Redirect, x.StatusCode));
         var analytics = await owner.GetFromJsonAsync<ManagedUrlResponse>("/api/urls/managed/manyhits/analytics");
-        Assert.Equal(20, analytics!.HitCount);
-        Assert.NotNull(analytics.LastAccessedAtUtc);
+        Assert.Equal(0, analytics!.HitCount);
+        await using var connection = new NpgsqlConnection(factory.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand("SELECT count(*), count(DISTINCT event_id) FROM click_outbox WHERE short_code = 'manyhits' AND tenant_id = @tenant", connection);
+        command.Parameters.AddWithValue("tenant", TenantA);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(20L, reader.GetInt64(0));
+        Assert.Equal(20L, reader.GetInt64(1));
+    }
+
+    [Fact]
+    public async Task RealKafkaPipelineReplaysWithoutDoubleCountAndRejectsWrongTenant()
+    {
+        var broker = Environment.GetEnvironmentVariable("Kafka__BootstrapServers")
+            ?? throw new InvalidOperationException("Real Kafka broker must be provided in Kafka__BootstrapServers.");
+        using var factory = new TestFactory();
+        using var owner = ClientFor(factory, TenantA);
+        using var publicClient = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+        Assert.Equal(HttpStatusCode.Created, (await owner.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com", shortCode = "pipeline1" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, (await publicClient.GetAsync("/r/pipeline1")).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await publicClient.PostAsJsonAsync("/api/urls/guest", new { originalUrl = "example.org", shortCode = "pipeline2" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, (await publicClient.GetAsync("/r/pipeline2")).StatusCode);
+
+        var topic = "schwab-click-test-" + Guid.NewGuid().ToString("N");
+        using (var admin = new AdminClientBuilder(new AdminClientConfig { BootstrapServers = broker }).Build())
+            await admin.CreateTopicsAsync([new TopicSpecification { Name = topic, NumPartitions = 1, ReplicationFactor = 1 }]);
+        var options = new AnalyticsOptions(broker, topic, "schwab-test-" + Guid.NewGuid().ToString("N"));
+        await using var dataSource = new NpgsqlDataSourceBuilder(factory.ConnectionString).Build();
+        using (var unavailablePublisher = new ClickOutboxPublisher(dataSource,
+            options with { BootstrapServers = "127.0.0.1:1" }, NullLogger<ClickOutboxPublisher>.Instance))
+            Assert.Equal(PublishOutcome.Retried, await unavailablePublisher.PublishOneAsync());
+        using var publisher = new ClickOutboxPublisher(dataSource, options, NullLogger<ClickOutboxPublisher>.Instance);
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        var store = new PostgresClickEventStore(dataSource);
+        var publish = await publisher.PublishOneAsync();
+        for (var retry = 0; publish == PublishOutcome.Retried && retry < 4; retry++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1 << retry));
+            publish = await publisher.PublishOneAsync();
+        }
+        if (publish != PublishOutcome.Published)
+        {
+            await using var diagnostic = new NpgsqlConnection(factory.ConnectionString);
+            await diagnostic.OpenAsync();
+            await using var failure = new NpgsqlCommand("SELECT last_error_code FROM click_outbox LIMIT 1", diagnostic);
+            Assert.Fail($"Publish outcome {publish}; error type {await failure.ExecuteScalarAsync()}");
+        }
+        Assert.Equal(PublishOutcome.NoWork, await publisher.PublishOneAsync());
+        await using var connection = new NpgsqlConnection(factory.ConnectionString);
+        await connection.OpenAsync();
+        await using var row = new NpgsqlCommand("SELECT event_id, tenant_id, mapping_id, short_code, occurred_at_utc, published_at_utc IS NOT NULL FROM click_outbox", connection);
+        await using var reader = await row.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        var click = new ManagedClickEventV1(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3), reader.GetFieldValue<DateTimeOffset>(4), null);
+        Assert.True(reader.GetBoolean(5));
+        Assert.Equal(TenantA, click.TenantId);
+        await reader.DisposeAsync();
+        Assert.Equal(0, (await owner.GetFromJsonAsync<ManagedUrlResponse>("/api/urls/managed/pipeline1/analytics"))!.HitCount);
+
+        using (var consumer = new ClickKafkaConsumer(options, store, NullLogger<ClickKafkaConsumer>.Instance))
+            Assert.Equal(ConsumeOutcome.Applied, await ConsumeUntilAsync(consumer, ConsumeOutcome.Applied));
+        Assert.Equal(1, (await owner.GetFromJsonAsync<ManagedUrlResponse>("/api/urls/managed/pipeline1/analytics"))!.HitCount);
+
+        // Replaying the committed event with a new group and publishing it again both exercise event-ID deduplication.
+        using (var replay = new ClickKafkaConsumer(options with { ConsumerGroup = "schwab-replay-" + Guid.NewGuid().ToString("N") }, store, NullLogger<ClickKafkaConsumer>.Instance))
+            Assert.Equal(ConsumeOutcome.Duplicate, await ConsumeUntilAsync(replay, ConsumeOutcome.Duplicate));
+        using (var producer = new ProducerBuilder<string, string>(options.ProducerConfig()).Build())
+        {
+            await producer.ProduceAsync(topic, new Message<string, string> { Key = click.MappingId, Value = JsonSerializer.Serialize(click with { TenantId = TenantB, EventId = Guid.NewGuid() }) });
+        }
+        using (var poison = new ClickKafkaConsumer(options with { ConsumerGroup = "schwab-poison-" + Guid.NewGuid().ToString("N") }, store, NullLogger<ClickKafkaConsumer>.Instance))
+        {
+            Assert.Equal(ConsumeOutcome.Duplicate, await ConsumeUntilAsync(poison, ConsumeOutcome.Duplicate));
+            Assert.Equal(ConsumeOutcome.DeadLettered, await ConsumeUntilAsync(poison, ConsumeOutcome.DeadLettered));
+        }
+        Assert.Equal(1, (await owner.GetFromJsonAsync<ManagedUrlResponse>("/api/urls/managed/pipeline1/analytics"))!.HitCount);
+        await using var count = new NpgsqlCommand("SELECT (SELECT count(*) FROM processed_click_events), (SELECT count(*) FROM click_dead_letters), (SELECT count(*) FROM click_outbox WHERE short_code = 'pipeline2')", connection);
+        await using var counts = await count.ExecuteReaderAsync();
+        Assert.True(await counts.ReadAsync());
+        Assert.Equal(1L, counts.GetInt64(0));
+        Assert.Equal(1L, counts.GetInt64(1));
+        Assert.Equal(0L, counts.GetInt64(2));
+    }
+
+    private static async Task<ConsumeOutcome> ConsumeUntilAsync(ClickKafkaConsumer consumer, ConsumeOutcome expected)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (!timeout.IsCancellationRequested)
+        {
+            var outcome = await consumer.ConsumeOneAsync(TimeSpan.FromMilliseconds(500), timeout.Token);
+            if (outcome != ConsumeOutcome.NoWork) return outcome;
+        }
+        throw new TimeoutException($"Expected {expected} from Kafka consumer.");
     }
 
     [Fact]
@@ -327,7 +432,7 @@ public class ShortenerApiTests
             if (!resetDatabase) return;
             using var connection = new NpgsqlConnection(ConnectionString);
             connection.Open();
-            using var command = new NpgsqlCommand("TRUNCATE TABLE url_mappings", connection);
+            using var command = new NpgsqlCommand("TRUNCATE TABLE click_dead_letters, processed_click_events, click_outbox, url_mappings", connection);
             command.ExecuteNonQuery();
         }
         protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
