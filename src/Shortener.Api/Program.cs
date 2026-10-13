@@ -1,41 +1,113 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.Identity.Web;
+using Shortener.Application;
+using Shortener.Application.Interfaces;
+using Shortener.Domain;
+using Shortener.Infrastructure;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<IUrlShortenerRepository, InMemoryUrlShortenerRepository>();
+builder.Services.AddSingleton<IUrlShortenerService, UrlShortenerService>();
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApi(builder.Configuration, "AzureAd");
+builder.Services.AddAuthorization();
 
 var app = builder.Build();
-
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+// A real app registration is required. No demo tenant or identity is installed at runtime.
+if (string.IsNullOrWhiteSpace(app.Configuration["AzureAd:ClientId"]))
+    throw new InvalidOperationException("AzureAd:ClientId must be configured with the Entra API app registration before starting the API.");
+if (app.Environment.IsDevelopment()) app.MapOpenApi();
+app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
-    app.MapOpenApi();
-}
-
+    var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+    app.Logger.LogError("Request failed. ExceptionType={ExceptionType} StackTrace={StackTrace} CorrelationId={CorrelationId}",
+        exception?.GetType().Name, exception?.StackTrace, context.TraceIdentifier);
+    await Results.Problem(title: "Unable to process the request.", statusCode: 500).ExecuteAsync(context);
+}));
 app.UseHttpsRedirection();
-
-var summaries = new[]
+app.UseAuthentication();
+app.Use(async (context, next) =>
 {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+    if (context.Request.Path.StartsWithSegments("/api/urls/managed") &&
+        context.User.Identity?.IsAuthenticated != true)
+        app.Logger.LogWarning("Managed operation rejected: unauthenticated. CorrelationId={CorrelationId}", context.TraceIdentifier);
+    await next(context);
+});
+app.UseAuthorization();
 
-app.MapGet("/weatherforecast", () =>
+app.MapPost("/api/urls/guest", async (CreateUrlRequest request, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+    try
+    {
+        var mapping = await service.CreateGuestAsync(request.OriginalUrl, request.ShortCode, cancellationToken);
+        return Results.Created($"/r/{mapping.ShortCode}", ToCreateResponse(mapping));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new ApiError(ex.Message)); }
+    catch (ShortCodeConflictException ex) { return Results.Conflict(new ApiError(ex.Message)); }
+}).WithName("CreateGuestLink").AllowAnonymous();
+
+app.MapPost("/api/urls/managed", async (CreateUrlRequest request, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
+    try
+    {
+        var mapping = await service.CreateManagedAsync(tenantId, request.OriginalUrl, request.ShortCode, cancellationToken);
+        return Results.Created($"/api/urls/managed/{mapping.ShortCode}", ToCreateResponse(mapping));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new ApiError(ex.Message)); }
+    catch (ShortCodeConflictException ex) { return Results.Conflict(new ApiError(ex.Message)); }
+}).WithName("CreateManagedLink").RequireAuthorization();
+
+app.MapGet("/r/{shortCode}", async (string shortCode, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    var mapping = await service.ResolveAsync(shortCode, cancellationToken);
+    return mapping is null ? Results.NotFound(new ApiError("Link not found or expired.")) : Results.Redirect(mapping.OriginalUrl);
+}).WithName("ResolveShortUrl").AllowAnonymous();
+
+app.MapGet("/api/urls/managed/{shortCode}", async (string shortCode, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
+    var mapping = await service.GetManagedAsync(tenantId, shortCode, cancellationToken);
+    return mapping is null ? Results.NotFound(new ApiError("Managed link not found.")) : Results.Ok(ToManagedResponse(mapping));
+}).WithName("GetManagedLink").RequireAuthorization();
+
+app.MapGet("/api/urls/managed/{shortCode}/analytics", async (string shortCode, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
+    var mapping = await service.GetManagedAsync(tenantId, shortCode, cancellationToken);
+    return mapping is null ? Results.NotFound(new ApiError("Managed link not found.")) : Results.Ok(ToManagedResponse(mapping));
+}).WithName("GetManagedLinkAnalytics").RequireAuthorization();
+
+app.MapGet("/api/urls/managed/analytics", async (ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
+    var mappings = await service.GetManagedAnalyticsAsync(tenantId, cancellationToken);
+    return Results.Ok(mappings.Select(ToManagedResponse).ToArray());
+}).WithName("GetManagedAnalytics").RequireAuthorization();
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
+static bool TryGetTenant(ClaimsPrincipal principal, HttpContext context, out Guid tenantId)
 {
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
+    var value = principal.FindFirstValue("tid") ?? principal.FindFirstValue("http://schemas.microsoft.com/identity/claims/tenantid");
+    if (Guid.TryParse(value, out tenantId) && tenantId != Guid.Empty) return true;
+    context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("TenantBoundary")
+        .LogWarning("Managed operation rejected: invalid tenant context. CorrelationId={CorrelationId}", context.TraceIdentifier);
+    return false;
 }
+
+static CreateUrlResponse ToCreateResponse(UrlMapping mapping) => new(
+    mapping.ShortCode, mapping.OriginalUrl, $"/r/{mapping.ShortCode}", mapping.CreatedAtUtc, mapping.ExpiresAtUtc);
+static ManagedUrlResponse ToManagedResponse(UrlMapping mapping) => new(
+    mapping.ShortCode, mapping.OriginalUrl, mapping.CreatedAtUtc, mapping.LastAccessedAtUtc, mapping.HitCount);
+
+public record CreateUrlRequest(string OriginalUrl, string? ShortCode = null);
+public record CreateUrlResponse(string ShortCode, string OriginalUrl, string ShortUrl, DateTimeOffset CreatedAtUtc, DateTimeOffset? ExpiresAtUtc);
+public record ManagedUrlResponse(string ShortCode, string OriginalUrl, DateTimeOffset CreatedAtUtc, DateTimeOffset? LastAccessedAtUtc, int HitCount);
+public record ApiError(string Error);
+public partial class Program { }

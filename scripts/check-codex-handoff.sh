@@ -35,7 +35,7 @@ require_in_order() {
 
 require_in_order 'title (## <name> Handoff)' '^## .+ Handoff[[:space:]]*$'
 require_in_order 'status date' '^Status: drafted on [0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'
-require_in_order 'working directory line' '^You are working in /Users/michaelinman/Repos/SchwabUrlShortener\.[[:space:]]*$'
+require_in_order 'working directory line' '^You are working in /.+\.[[:space:]]*$'
 require_in_order 'repo standards' '^Follow these repo standards exactly:[[:space:]]*$'
 require_in_order 'task line' '^Task:[[:space:]]*.+$'
 require_in_order 'goal' '^Goal:[[:space:]]*$'
@@ -49,6 +49,12 @@ require_in_order 'realtime / no-polling requirements' '^Realtime / no-polling re
 require_in_order 'testing' '^Testing:[[:space:]]*$'
 require_in_order 'documentation' '^Documentation:[[:space:]]*$'
 require_in_order 'completion criteria' '^Completion criteria:[[:space:]]*$'
+
+declared_worktree="$(sed -nE 's#^You are working in (/.+)\.[[:space:]]*$#\1#p' "$file" | head -n 1)"
+if [[ -n "$declared_worktree" ]] && ! git -C "$(dirname "$0")/.." worktree list --porcelain | grep -Fxq "worktree $declared_worktree"; then
+  echo "working directory is not a registered repository worktree: $declared_worktree"
+  errors=1
+fi
 
 if ! grep -Eq '^[1-9][0-9]*\. .+' "$file"; then
   echo 'missing numbered in-scope item: 1. ...'
