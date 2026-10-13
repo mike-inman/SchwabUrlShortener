@@ -1,6 +1,6 @@
 # Schwab URL Shortener Prototype
 
-Updated: 2026-10-13 05:42 CDT
+Updated: 2026-10-13 09:42 CDT
 
 This repository contains a .NET 10 URL shortener prototype. Anonymous guest links expire after seven days; Entra-authenticated managed links belong to the validated token's tenant. PostgreSQL stores links, managed click outbox events, and aggregate counts. Redis caches public redirect mappings. Kafka carries managed click events to the Analytics worker. A Blazor Server app provides guest creation and a signed-in managed dashboard.
 
@@ -36,6 +36,29 @@ This repository contains a .NET 10 URL shortener prototype. Anonymous guest link
 Create responses contain a relative `shortUrl` such as `/r/demo1`; the serving domain is chosen by deployment. Short codes are unique across both link modes.
 
 For the Web app, configure `ShortenerApi:BaseUrl` with the API origin and `ShortenerApi:Scope` with the API's delegated scope. Configure `AzureAd:Instance`, `AzureAd:TenantId`, `AzureAd:ClientId`, and `AzureAd:ClientSecret` for the Web app registration in its separate local secret store or environment, then run `dotnet run --project src/Shortener.Web/Shortener.Web.csproj`. The Web app keeps tokens and the client secret on the server. Guest creation remains available without Web sign-in configuration. The app registration must allow the Web callback URL used locally.
+
+## Full local Docker Compose bundle
+
+The checked-in `compose.yaml` groups PostgreSQL, Redis, Kafka, API, Web, and Analytics under `schwab-url-shortener`. It uses a configurable Schwab-only subnet (`SCHWAB_SUBNET`, default `10.251.53.0/24`) for service-name DNS; inspect existing Docker networks and host routes before using that default on another machine. Host ports remain loopback-only: PostgreSQL `63651`, Redis `63652`, Kafka `63653`, API `63654`, Web HTTP `63655`, and optional Web HTTPS `63656`. Kafka advertises `localhost:63653` to host clients and `kafka:9092` to app containers.
+
+1. Copy the six `docker/*.env.example` files to private files outside the repository, set mode `0600`, and replace placeholders with your own credentials and absolute paths. `compose.env` supplies the existing volume names and path to the PostgreSQL password environment file; `apps.env` supplies the paths to separate API, Web, and Analytics environment files. Existing installations must keep their original volume identifiers and PostgreSQL password. Never commit these files. The Web can serve guests with only `ShortenerApi__BaseUrl`; managed sign-in requires all real Web Entra settings and a registered delegated API scope. The API always requires a real `AzureAd__ClientId` and database connection at startup.
+2. On a **new** installation, create the five external data volumes named in `compose.env` with `docker volume create <volume-name>` before starting. On an existing installation, verify the names with `docker inspect` and reuse them. Do not replace or prune volumes. Create the PostgreSQL password file only for a new installation; the API and Analytics connection strings must use that same password and the internal host `postgres`. After PostgreSQL first starts on a new installation, create the disposable test database with `docker exec schwab-url-shortener-postgres createdb -U schwab_local Schwab_test_local`; do not run this on an existing database.
+3. From the repo root, set `SCHWAB_PRIVATE_DIR` to the directory containing your private `compose.env` and `apps.env`. Use the following explicit commands; they do not migrate an application database automatically:
+
+   ```bash
+   docker compose --env-file "$SCHWAB_PRIVATE_DIR/compose.env" --env-file "$SCHWAB_PRIVATE_DIR/apps.env" -f compose.yaml config --quiet
+   docker compose --env-file "$SCHWAB_PRIVATE_DIR/compose.env" --env-file "$SCHWAB_PRIVATE_DIR/apps.env" -f compose.yaml --profile migration build api web analytics migrate
+   docker compose --env-file "$SCHWAB_PRIVATE_DIR/compose.env" --env-file "$SCHWAB_PRIVATE_DIR/apps.env" -f compose.yaml up -d postgres redis kafka
+   docker compose --env-file "$SCHWAB_PRIVATE_DIR/compose.env" --env-file "$SCHWAB_PRIVATE_DIR/apps.env" -f compose.yaml --profile migration run --rm --no-deps migrate
+   docker exec schwab-url-shortener-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic schwab-managed-clicks-v2 --partitions 1 --replication-factor 1
+   docker compose --env-file "$SCHWAB_PRIVATE_DIR/compose.env" --env-file "$SCHWAB_PRIVATE_DIR/apps.env" -f compose.yaml up -d api web analytics
+   ```
+
+   The migration container accepts `Schwab_test_local` by default and is idempotent. For `Schwab_local` or another application database, first create and verify a separate backup, review the target connection string privately, then set `SCHWAB_APP_MIGRATION_APPROVED=yes` in the Compose invocation. This explicit action is never part of API startup or ordinary `up`. Use the topic name configured in `analytics.env` when creating the Kafka topic.
+4. Check `http://localhost:63654/health/ready`, `http://localhost:63655/health/ready`, and the Compose health states. The Web guest page is `http://localhost:63655/`; the API guest create endpoint is `http://localhost:63654/api/urls/guest`. Analytics is healthy only when its configured PostgreSQL database and Kafka topic respond. API readiness checks migrations and Redis. Container health does not prove managed login, customer registration, or production operations.
+5. For real local OIDC callbacks, trust the local development certificate with `dotnet dev-certs https --trust`, export it to a private PFX using `dotnet dev-certs https -ep <private-pfx-path> -p <private-password>`, store that path and password only in `apps.env`, and use `-f compose.yaml -f compose.https.yaml` on the Web `up` command. Keep the PFX mode `0600`. The HTTPS page is `https://localhost:63656/`, and the Web app registration must allow exactly `https://localhost:63656/signin-oidc` (and the matching signed-out callback if used). Configure the real Web client ID, tenant, client secret, and delegated scope in the private `web.env`; no runtime test identity is installed. Confirm the provider redirect and complete sign-in with the operator before claiming managed access.
+
+For a safe local stop, run `docker compose ... stop api web analytics` or `docker compose ... stop` with the same files; neither removes volumes. Back up each database to a private file before any application migration, for example `docker exec schwab-url-shortener-postgres pg_dump -U schwab_local -Fc -d Schwab_local > /private/path/Schwab_local.dump`, and verify that file before proceeding. Restore only to a separately chosen target using `pg_restore` after review; the normal startup commands never restore or truncate data. The Web Data Protection key ring persists in the dedicated `schwab-url-shortener-web-keys` volume across container recreation; protect this local volume and the private certificate. See [the dated Compose validation note](docs/2026-10-13-0942-full-local-compose-apps-validation.md) for this host's results and remaining identity gates.
 
 ## Scenarios
 

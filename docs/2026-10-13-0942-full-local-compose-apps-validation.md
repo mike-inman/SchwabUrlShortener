@@ -1,0 +1,22 @@
+# Full local Compose application validation — 2026-10-13 09:42 CDT
+
+## Scope and setup
+
+Implemented the 09:20 full application handoff in `/Users/michaelinman/Repos/SchwabUrlShortener-workspace-authorization` on `codex/workspace-authorization`, starting from clean commit `af2671b`. Docker network inspection found the existing Docker bridge subnets in `172.17.0.0/16` through `172.31.0.0/16` and several `192.168.0.0/20` ranges; the host route table showed no conflict with the selected Schwab-only `10.251.53.0/24` network. The subnet remains configurable for another machine.
+
+Private mode-0600 API, Web, Analytics, and Compose config files were created outside the repository from existing local secret stores. Existing PostgreSQL password configuration was not changed. Before moving containers, `Schwab_local` and `Schwab_test_local` were backed up to private mode-0600 custom-format dumps. The existing PostgreSQL, Redis, and three Kafka volume attachments were recorded and matched after Compose recreated only the Schwab data containers. The application database remained at one EF migration; the disposable test database remained at four. Both database names persisted.
+
+## Observed local results
+
+- `docker compose ... config --quiet` passed for base and HTTPS override. Three app images and the one-shot migration image built from .NET 10 source. The migration job ran only against `Schwab_test_local` and reported no pending migrations. A guard test with a nonsecret `Schwab_local` connection string refused to migrate without the explicit approval flag.
+- Docker Compose shows PostgreSQL, Redis, Kafka, API, Web, and Analytics in one `schwab-url-shortener` project, all healthy. PostgreSQL/Redis/Kafka retain loopback ports 63651–63653; API, Web HTTP, and Web HTTPS use loopback ports 63654–63656. The new Web Data Protection key volume is persistent. No volume was removed or pruned.
+- Kafka host metadata advertised `localhost:63653`; the internal broker CLI reached `kafka:9092`. The single-replica local `schwab-managed-clicks-v2` topic was created and its metadata checked from both sides.
+- API and Web readiness returned 200; the Web homepage returned 200. The real API guest create returned 201 and its redirect returned 302 to the expected destination. In the disposable database, two seeded managed mappings were redirected through the real API; the containerized worker published and consumed a V1 and V2 event, with each aggregate count reaching one and a matching processed event. The fixture used direct database setup, not an authenticated managed creation call.
+- Blazor negotiation offered WebSockets, and both HTTP and HTTPS host endpoints completed a `101 Switching Protocols` upgrade. The private localhost certificate enabled HTTPS readiness and homepage responses. `/account/signin` initiated a real OIDC redirect (302) with existing local provider settings; no callback, token acquisition, or signed-in managed operation was completed.
+- With the HTTPS override active, Web HTTP on port 63655 redirects (307) to `https://localhost:63656/`; HTTPS Web and API readiness returned 200 after final restart. The mounted Web key ring contained a persisted key file.
+- `dotnet build SchwabUrlShortener.slnx` passed with zero warnings/errors. With Analytics paused to avoid consuming test fixtures, `dotnet test SchwabUrlShortener.slnx --no-build` passed 60/60 tests: 25 unit, 18 real PostgreSQL/Redis/Kafka integration, 17 Web. Analytics was restarted afterward.
+- A reversible Kafka outage check stopped only the Schwab broker. Analytics became unhealthy after 56 seconds; Kafka and Analytics returned to healthy 11 seconds after the broker restart. Its existing Kafka data volume remained attached.
+
+## Boundaries and remaining gates
+
+The running API/Web/Analytics use only the guarded disposable `Schwab_test_local` database. `Schwab_local` was not migrated, truncated, or used for the app smoke test. The single-broker Kafka and local certificate do not establish production availability or trust. Live Entra delegated-scope login, wrong-scope rejection, customer External ID signup, Google federation, and a full signed-in managed UI flow remain unverified. The later customer identity/onboarding phase must complete those provider steps. Kubernetes/Terraform and deployment are outside this local Compose slice. No unrelated AI-Influencer-Factory service, network, or volume was changed.

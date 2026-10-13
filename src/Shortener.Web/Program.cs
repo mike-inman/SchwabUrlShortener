@@ -34,6 +34,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<IShortenerApiClient, ShortenerApiClient>();
+builder.Services.AddHttpClient("availability", client => client.Timeout = TimeSpan.FromSeconds(3));
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
@@ -51,6 +52,28 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
+
+app.MapGet("/health/live", () => Results.Ok(new { status = "live" })).AllowAnonymous();
+app.MapGet("/health/ready", async (IHttpClientFactory clients, IConfiguration configuration, CancellationToken cancellationToken) =>
+{
+    var baseUrl = configuration["ShortenerApi:BaseUrl"];
+    if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var apiBase))
+        return Results.Problem(title: "Shortener API address is not configured.", statusCode: 503);
+    try
+    {
+        using var response = await clients.CreateClient("availability").GetAsync(
+            new Uri(apiBase, "/health/ready"), cancellationToken);
+        return response.IsSuccessStatusCode
+            ? Results.Ok(new { status = "ready" })
+            : Results.Problem(title: "Shortener API is unavailable.", statusCode: 503);
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+    {
+        app.Logger.LogWarning("Web readiness failed. Dependency=ShortenerApi ExceptionType={ExceptionType}", ex.GetType().Name);
+        return Results.Problem(title: "Shortener API is unavailable.", statusCode: 503);
+    }
+}).AllowAnonymous();
+app.MapGet("/health/identity", (IdentityAvailability identity) => Results.Ok(new { configured = identity.Configured })).AllowAnonymous();
 
 app.MapGet("/account/signin", (IdentityAvailability identity) =>
     identity.Configured

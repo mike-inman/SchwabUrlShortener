@@ -6,7 +6,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: schwab-url-shortener-postgres
-    network_mode: bridge
+    networks: [schwab]
     env_file:
       - ${SCHWAB_POSTGRES_ENV_FILE:?Set SCHWAB_POSTGRES_ENV_FILE to a local password file}
     environment:
@@ -25,7 +25,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: schwab-url-shortener-redis
-    network_mode: bridge
+    networks: [schwab]
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
       - "127.0.0.1:63652:6379"
@@ -40,22 +40,22 @@ services:
   kafka:
     image: apache/kafka:4.1.2
     container_name: schwab-url-shortener-kafka
-    network_mode: bridge
+    networks: [schwab]
     environment:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:9094,CONTROLLER://:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
       KAFKA_NODE_ID: "1"
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:63653
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:63653
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
     ports:
-      - "127.0.0.1:63653:9092"
+      - "127.0.0.1:63653:9094"
     volumes:
       - kafkadata:/var/lib/kafka/data
       - kafkasecrets:/etc/kafka/secrets
@@ -66,6 +66,109 @@ services:
       timeout: 10s
       retries: 8
       start_period: 30s
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+      args:
+        PROJECT: src/Shortener.Api/Shortener.Api.csproj
+    image: schwab-url-shortener-api:local
+    container_name: schwab-url-shortener-api
+    command: ["dotnet", "Shortener.Api.dll"]
+    env_file:
+      - path: ${SCHWAB_API_ENV_FILE:?Set SCHWAB_API_ENV_FILE to a private API environment file}
+        format: raw
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+    ports:
+      - "127.0.0.1:63654:8080"
+    networks: [schwab]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+      args:
+        PROJECT: src/Shortener.Web/Shortener.Web.csproj
+    image: schwab-url-shortener-web:local
+    container_name: schwab-url-shortener-web
+    command: ["dotnet", "Shortener.Web.dll"]
+    env_file:
+      - path: ${SCHWAB_WEB_ENV_FILE:?Set SCHWAB_WEB_ENV_FILE to a private Web environment file}
+        format: raw
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+    ports:
+      - "127.0.0.1:63655:8080"
+    volumes:
+      - webkeys:/root/.aspnet/DataProtection-Keys
+    networks: [schwab]
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  analytics:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+      args:
+        PROJECT: src/Shortener.Analytics/Shortener.Analytics.csproj
+    image: schwab-url-shortener-analytics:local
+    container_name: schwab-url-shortener-analytics
+    command: ["dotnet", "Shortener.Analytics.dll"]
+    env_file:
+      - path: ${SCHWAB_ANALYTICS_ENV_FILE:?Set SCHWAB_ANALYTICS_ENV_FILE to a private Analytics environment file}
+        format: raw
+    networks: [schwab]
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/schwab-analytics-ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+
+  migrate:
+    profiles: [migration]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.migrate
+    image: schwab-url-shortener-migrate:local
+    container_name: schwab-url-shortener-migrate
+    env_file:
+      - path: ${SCHWAB_API_ENV_FILE:?Set SCHWAB_API_ENV_FILE to a private API environment file}
+        format: raw
+    environment:
+      SCHWAB_APP_MIGRATION_APPROVED: ${SCHWAB_APP_MIGRATION_APPROVED:-no}
+    networks: [schwab]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+networks:
+  schwab:
+    name: schwab-url-shortener-app
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${SCHWAB_SUBNET:-10.251.53.0/24}
 
 volumes:
   pgdata:
@@ -83,3 +186,5 @@ volumes:
   kafkaconfig:
     external: true
     name: ${SCHWAB_KAFKA_CONFIG_VOLUME:-schwab-url-shortener-kafka-config}
+  webkeys:
+    name: schwab-url-shortener-web-keys

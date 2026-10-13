@@ -1,0 +1,10 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0
+WORKDIR /src
+COPY . .
+RUN dotnet restore src/Shortener.Infrastructure/Shortener.Infrastructure.csproj
+RUN dotnet build src/Shortener.Infrastructure/Shortener.Infrastructure.csproj -c Release --no-restore
+RUN dotnet tool install --global dotnet-ef --version 10.0.12
+ENV PATH="/root/.dotnet/tools:${PATH}"
+COPY docker/migrate.sh /usr/local/bin/schwab-migrate
+RUN chmod +x /usr/local/bin/schwab-migrate
+ENTRYPOINT ["/usr/local/bin/schwab-migrate"]
