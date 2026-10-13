@@ -1,6 +1,6 @@
 # Azure scale-out contract — 2026-10-13 17:20 CDT
 
-Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts`. **Revised 18:50 CDT: replaced the staging design with one lean, scalable environment** (no staging, no Front Door, no private endpoints, Burstable PostgreSQL, Redis as a container, `rg-schwab-url-shortener`). Michael approved deleting `rg-shortener-staging`; its deletion was started at 18:47 CDT. Change this file only by editing it and telling every active track.
+Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts`. **Revised 18:50 CDT: replaced the staging design with one lean, scalable environment** (no staging, no Front Door, no private endpoints, Burstable PostgreSQL, Redis as a container, `rg-schwab-url-shortener`). Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. **Revised 19:00 CDT: restored low-cost design controls** — PostgreSQL VNet integration (no public endpoint), Redis persistence, monitoring alerts and diagnostics, and an automated Kafka-lag scale demonstration. **Revised 19:05 CDT**: PostgreSQL pool size set to 2 for the 35-connection B1ms limit. Change this file only by editing it and telling every active track.
 
 ## Purpose
 
@@ -42,29 +42,32 @@ There is exactly one Azure environment. It must:
 | Container Apps environment | Consumption workload profile, VNet-integrated | — | Dedicated workload profiles if needed |
 | `ca-shortener-api` | 0.25 vCPU / 0.5 GiB, min 1, max 5 | HTTP rule: 10 concurrent requests per replica | Raise max; higher concurrency target |
 | `ca-shortener-web` | 0.25 vCPU / 0.5 GiB, min 1, max 3, sticky sessions | HTTP rule: 10 concurrent requests per replica | Azure SignalR Service for many circuits |
-| `ca-shortener-analytics` | 0.25 vCPU / 0.5 GiB, min 1, max 4 | KEDA Kafka lag rule, lag threshold 50 | Max up to 32 (partition count) |
-| `ca-shortener-redis` | `redis:7.4-alpine`, 0.25 vCPU / 0.5 GiB, min 1, max 1, internal TCP ingress, password required, no persistence | — | Azure Managed Redis, one connection-string change |
+| `ca-shortener-analytics` | 0.25 vCPU / 0.5 GiB, min 1, max 4 | KEDA Kafka lag rule, lag threshold 50; demonstrated live by the scale script through anonymous redirects of one managed demo link | Max up to 32 (partition count) |
+| `ca-shortener-redis` | `redis:7.4-alpine`, 0.25 vCPU / 0.5 GiB, min 1, max 1, internal TCP ingress, password required, append-only persistence (`appendfsync everysec`) on an Azure Files share | — | Azure Managed Redis, one connection-string change |
 | `ca-shortener-proxy` (only if native path routing is not used; see Public routing) | `caddy:2.10-alpine`, 0.25 vCPU / 0.5 GiB, min 1, max 2 | HTTP rule | Front Door Standard/Premium |
 | `caj-shortener-migrate` | Manual job, API image, `--migrate` | — | — |
-| PostgreSQL Flexible Server | Burstable `Standard_B1ms`, PostgreSQL 17, 32 GiB, 7-day backups, public access with firewall, no PgBouncer | Connection budget sized to max replicas (below) | General Purpose tier plus built-in PgBouncer |
+| PostgreSQL Flexible Server | Burstable `Standard_B1ms`, PostgreSQL 17, 32 GiB, 7-day backups, **private access (VNet integration), no public endpoint**, no PgBouncer | Connection budget sized to max replicas (below) | General Purpose tier plus built-in PgBouncer; zone-redundant high availability |
 | Event Hubs | Standard, 1 throughput unit, auto-inflate max 2, hub `managed-clicks-v2` with 32 partitions, 7-day retention, consumer group `shortener-analytics-v1` | Partitions already allow 32 consumers | More throughput units |
 | Container Registry | Basic | — | — |
 | Key Vault | Standard, RBAC | — | Private endpoint |
 | Storage (Data Protection keys) | StorageV2, Standard_LRS, shared-key access disabled | — | Private endpoint |
+| Storage (Redis persistence) | Separate StorageV2 account, Standard_LRS, Azure Files share `redis-data` (1 GiB quota). Shared-key access is enabled on this account only, because Container Apps Azure Files mounts require the account key. | — | Not needed with Azure Managed Redis |
 | Log Analytics | Pay-as-you-go with a 1 GB/day ingestion cap | — | Remove cap, add alerts |
 | Budget | USD 100/month, alerts at 50/80/100% to `BUDGET_CONTACT_EMAIL` | — | — |
+| Monitoring | Diagnostic settings from PostgreSQL, Event Hubs, Key Vault, and the Container Apps environment to Log Analytics. Azure Monitor alerts, emailed to `BUDGET_CONTACT_EMAIL` through one action group: API or Web 5xx responses above 5% for 5 minutes; any app restarting repeatedly; Analytics consumer lag above 1,000 for 10 minutes; outbox oldest unpublished event above 5 minutes (from the existing `shortener.clicks.outbox.oldest_seconds` metric if exported, otherwise from logs); PostgreSQL CPU above 80% or connections above 80% of `max_connections` for 10 minutes. | Alerts show when scaling limits are reached | Paging, dashboards |
 
 Minimum replicas are 1 (not 0) on API, Web, and Analytics so evaluators never wait for a cold start and click analytics stay prompt.
 
-**PostgreSQL connection budget:** set `Maximum Pool Size` in the app connection string so that `(API max replicas + Analytics max replicas) × Maximum Pool Size ≤ max_connections − 10`. Track C reads the server's actual `max_connections` for `Standard_B1ms` and records the arithmetic. With API max 5 and Analytics max 4, a pool size of 5 uses 45 connections. Web does not connect to PostgreSQL.
+**PostgreSQL connection budget:** Microsoft lists `Standard_B1ms` at 35 user connections. App connection strings set `Maximum Pool Size=2`. Budget at maximum scale: API 5 replicas × 2 = 10; Analytics 4 replicas × (2 pooled + 1 for its readiness check, which uses a separate connection string and therefore a separate pool) = 12; migration job 1; total 23 of 35, leaving 12 for administration and headroom. Web does not connect to PostgreSQL. Track C confirms the server's actual `max_connections` and records the arithmetic. Each query takes milliseconds, so two connections per replica serve far more requests than the scale demonstration sends; excess requests wait briefly for a pooled connection rather than failing. The PostgreSQL connections alert (80% of the limit) watches this constraint, and PgBouncer on General Purpose is the production step that removes it.
 
 ## Network
 
 - Virtual network: `10.60.0.0/16` (no cost by itself).
 - Container Apps environment subnet: `10.60.0.0/23`, delegated to `Microsoft.App/environments`, with service endpoints `Microsoft.Storage`, `Microsoft.KeyVault`, and `Microsoft.EventHub`.
-- No private endpoints and no private DNS zones.
+- PostgreSQL subnet: `10.60.2.0/24`, delegated to `Microsoft.DBforPostgreSQL/flexibleServers`, with private DNS zone `shortener.private.postgres.database.azure.com` linked to the VNet. The server has no public endpoint; only resources in the VNet can reach it. Migrations run as a job inside the environment, so no laptop access is needed.
+- No private endpoints for Key Vault, Storage, or Event Hubs. Service endpoints plus firewall rules restrict them to the Container Apps subnet at no cost; private endpoints (about USD 7–8/month each) are the documented production step.
 - Storage, Key Vault, and Event Hubs network rules allow only the Container Apps subnet (via service endpoints), plus the deploying operator's current public IP while Track C provisions; Track C removes the operator IP afterwards and records it.
-- PostgreSQL uses public access with TLS required, a strong password, and the firewall rule allowing Azure services. This is a documented hardening gap; the production step is private access.
+- PostgreSQL requires TLS and a strong password in addition to private network access.
 - All data access uses TLS. Key Vault, Storage, and registry access use managed identities and RBAC.
 
 ## Image build (Track C)
@@ -200,4 +203,5 @@ The Analytics worker serves `GET /health/live` and `GET /health/ready` on port `
 - `POSTGRES_PASSWORD` in the `azd` environment; Track C copies it from the deleted staging environment's local file without displaying it.
 - Entra redirect URIs for the public host on the **SchwabUrlShortener Web** registration (`d4cd63a0-5583-41ad-a640-803ea76bb3a8`) and the External ID Web registration.
 - Upgrade the free trial to Pay-As-You-Go before it ends.
+- After sign-in works: sign in once and create one managed demo link for the scale demonstration (Track C names the short code it needs).
 - Optional: a custom domain and DNS records.

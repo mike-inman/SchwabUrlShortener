@@ -1,5 +1,5 @@
 ## Track C — Azure Lean Scalable Environment Handoff
-Status: drafted on 2026-10-13; **rewritten 18:50 CDT** for one lean environment, replacing the staging design.
+Status: drafted on 2026-10-13; **rewritten 18:50 CDT** for one lean environment, replacing the staging design. **Revised 19:00 CDT**: PostgreSQL VNet integration, Redis persistence, monitoring, and automated Kafka-lag scale demo restored.
 You are working in /Users/michaelinman/Repos/SchwabUrlShortener-infra.
 
 Follow these repo standards exactly:
@@ -13,7 +13,8 @@ What changed and why:
 - Michael does not want a staging environment. There is exactly one environment, `rg-schwab-url-shortener`, sized small but configured to demonstrate scaling while evaluators use the app.
 - The previous design priced at roughly USD 300–600/month; the target is roughly USD 40–70/month.
 - Azure Managed Redis `Balanced_B0`/`B1` were unavailable (`CacheCapacityUnavailable` in `centralus`; not creatable in `eastus2`). The subscription is a free trial and `Microsoft.Cache` is not registered. Redis now runs as a container, so no Redis SKU is needed.
-- Michael approved deleting `rg-shortener-staging`; deletion was started at 18:47 CDT from Claude's session. Confirm it reports not found before you deploy. Never recreate it.
+- Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. Never recreate it.
+- Michael wants the environment to demonstrate good design principles. Low-cost controls stay in: PostgreSQL has no public endpoint, data services accept only the app subnet, Redis persists, and alerts are configured.
 
 Deployment authority:
 - Create and update resources only in `rg-schwab-url-shortener`, in subscription `baaf4acd-ff40-43d1-a7ba-6089a2c4f41e`. Print `az account show` subscription ID and user before the first deployment and stop if either differs from the contract.
@@ -36,21 +37,23 @@ In scope only:
 P1 — Foundation and data (one approval)
 1. Register resource providers the deployment needs if not registered (`Microsoft.App`, `Microsoft.OperationalInsights`, `Microsoft.ContainerRegistry`, `Microsoft.KeyVault`, `Microsoft.Storage`, `Microsoft.EventHub`, `Microsoft.DBforPostgreSQL`, `Microsoft.ManagedIdentity`, `Microsoft.Consumption`). Record which were registered.
 2. Resource group `rg-schwab-url-shortener` in `centralus`.
-3. VNet and Container Apps subnet with service endpoints, exactly per the contract.
+3. VNet, the Container Apps subnet with service endpoints, and the delegated PostgreSQL subnet with its private DNS zone, exactly per the contract.
 4. Log Analytics with a 1 GB/day cap, workspace-based Application Insights.
 5. Container Registry Basic, admin user disabled.
 6. Key Vault Standard, RBAC, soft delete and purge protection; network rules per the contract.
 7. User-assigned identities `id-shortener-api`, `id-shortener-web`, `id-shortener-analytics`, `id-shortener-proxy` (only if the proxy is used), each with only the roles its app needs: `AcrPull`, `Key Vault Secrets User`, and for API and Web, `Storage Blob Data Contributor` on the `dataprotection` container and `Key Vault Crypto User` on its own Data Protection key.
 8. Storage account for Data Protection keys and Key Vault keys `dataprotection-api` and `dataprotection-web`, per the contract.
-9. PostgreSQL Flexible Server Burstable `Standard_B1ms`, PostgreSQL 17, 32 GiB, 7-day backups, TLS required, administrator `shortener`, database `shortener`, firewall rule allowing Azure services. Read `max_connections` and record the connection-budget arithmetic from the contract.
+9. PostgreSQL Flexible Server Burstable `Standard_B1ms`, PostgreSQL 17, 32 GiB, 7-day backups, **private access (VNet integration) in the delegated subnet, no public endpoint, no firewall rules**, TLS required, administrator `shortener`, database `shortener`. Read `max_connections` and record the connection-budget arithmetic from the contract. Private access cannot be changed after creation; verify it in the what-if before approval.
 10. Event Hubs Standard per the contract, with a Send/Listen-only authorization rule and network rules per the contract.
 11. Key Vault secrets `pg-app-connection`, `pg-migrate-connection`, `eventhubs-connection`, and `redis-connection` (with a generated Redis password; never printed).
 12. Budget USD 100/month with alerts at 50/80/100% to `BUDGET_CONTACT_EMAIL`.
+12a. The separate Redis persistence storage account and Azure Files share `redis-data`, per the contract.
+12b. Diagnostic settings, one action group, and the alert rules listed under Monitoring in the contract. Record each rule's name and threshold.
 
 P2 — Apps with today's images (one approval)
 13. Container Apps environment (consumption workload profile) in the subnet, logging to Log Analytics.
 14. Public routing per the contract: verify native environment path-based routing (general availability in `centralus`, WebSockets, sticky sessions for Web) and record the documentation URL. Use it if all three hold; otherwise deploy `ca-shortener-proxy` with Caddy configured from `deploy/Caddyfile.local` plus the contract's `header_up Host` and trusted-proxy settings, delivered as a Container Apps secret or a config file mount, not a custom image.
-15. `ca-shortener-redis`: `redis:7.4-alpine` pinned by digest, `--requirepass` from the Key Vault secret, `--appendonly no`, internal TCP ingress on 6379, 1 replica.
+15. `ca-shortener-redis`: `redis:7.4-alpine` pinned by digest, `--requirepass` from the Key Vault secret, `--appendonly yes --appendfsync everysec --dir /data`, `/data` mounted from the `redis-data` Azure Files share through a Container Apps environment storage definition, internal TCP ingress on 6379, 1 replica. Verify that data survives a replica restart.
 16. `ca-shortener-api`, `ca-shortener-web`, `ca-shortener-analytics` with the contract's CPU, memory, replica, scale-rule, probe, `AllowedHosts`, `PublicLinks__BaseUrl`, and Key Vault reference settings. Web: single revision mode, session affinity `sticky`. Analytics: KEDA `kafka` rule using the Event Hubs SASL secret.
 17. `caj-shortener-migrate`: manual job, API image, `--migrate`, `pg-migrate-connection`, 10-minute timeout.
 18. Build and push images with `infra/scripts/build-images.sh`, run the migration job once, and confirm all apps healthy.
@@ -59,21 +62,23 @@ P2 — Apps with today's images (one approval)
 P3 — Scale-out settings and scale demonstration (one approval, after Tracks A and B have merged to `main`)
 20. Rebuild images from the new `main`, set `enableScaleOutSettings=true`, restore Analytics to min 1 / max 4, and redeploy.
 21. Add `infra/scripts/scale-demo.sh`, a bounded, opt-in load script for this environment only. It:
-    - creates one guest link, then sends guest redirect requests to it at a fixed concurrency for a fixed duration (defaults: 60 concurrent for 3 minutes; hard caps: 100 concurrent, 5 minutes), with no other endpoints;
-    - samples `az containerapp replica list` for API and Web every 15 seconds during the run and for 5 minutes after, printing a timestamped replica-count table;
+    - takes the short code of one managed demo link as `--managed-code` (Michael creates it once after signing in), and optionally creates one guest link;
+    - sends anonymous redirect requests to the managed link (and the guest link, if created) at a fixed concurrency for a fixed duration (defaults: 60 concurrent for 3 minutes; hard caps: 100 concurrent, 5 minutes), with no other endpoints. Managed redirects are anonymous and each one produces a click event, so the run drives both API HTTP scaling and Analytics Kafka-lag scaling;
+    - samples `az containerapp replica list` for API, Web, and Analytics every 15 seconds during the run and for 5 minutes after, and the Event Hubs consumer-group lag, printing a timestamped table;
+    - after the run, prints the managed link's hit count from the API's authorized analytics endpoint only if a token is supplied through an environment variable; otherwise states that the count must be checked in the dashboard;
     - prints request totals, error rate, and latency percentiles;
     - refuses to run unless `--confirm-environment rg-schwab-url-shortener` is passed.
     Use a load tool available via Homebrew or a container (for example `hey`), and record which.
-22. Run it once with Michael's approval and record: replicas before, peak, and after scale-in; requests, errors, and latency. Then confirm KEDA's Kafka rule is configured and record its settings. A Kafka-lag scale-out demonstration needs authenticated managed-link clicks; record it as a manual evaluator-facing step rather than automating sign-in.
+22. Run it once with Michael's approval and record: API, Web, and Analytics replicas before, at peak, and after scale-in; consumer lag over time; requests, errors, and latency; and that every click was counted once (the dashboard count rises by exactly the number of successful managed redirects). If Michael has not yet created the managed demo link, ask him for it; do not create managed rows directly in the database.
 
 Out of scope:
-- A staging or second environment, Front Door, private endpoints, Azure Managed Redis, PgBouncer, WAF, multi-region, zone redundancy, Azure SignalR Service, PostgreSQL Entra authentication, Event Hubs OAuth. List each as a documented production step.
+- A staging or second environment, Front Door, private endpoints for Key Vault/Storage/Event Hubs, Azure Managed Redis, PgBouncer, WAF, multi-region, zone redundancy and PostgreSQL high availability, Azure SignalR Service, PostgreSQL Entra authentication and Event Hubs OAuth (both need application code changes). List each as a documented production step with its approximate added monthly cost.
 - Entra app registration changes (Michael does these).
 - Any change under `src/`, `tests/`, `Dockerfile`, or Compose files.
 
 Required discovery before edits:
 - Read the revised contract in full and your existing `infra/**`, `azure.yaml`, and validation note.
-- Check Microsoft documentation, recording URLs, for: Container Apps environment path-based routing status; Container Apps TCP ingress for an internal Redis app; service endpoint support for Key Vault, Storage, and Event Hubs Standard from a Container Apps subnet; `Standard_B1ms` `max_connections`; KEDA Kafka scaler with SASL in Container Apps; Container Apps managed certificates for a custom domain.
+- Check Microsoft documentation, recording URLs, for: PostgreSQL Flexible Server private access (VNet integration) on the Burstable tier and its private DNS zone requirements; Container Apps Azure Files volume mounts and their account-key requirement; Container Apps environment path-based routing status; Container Apps TCP ingress for an internal Redis app; service endpoint support for Key Vault, Storage, and Event Hubs Standard from a Container Apps subnet; `Standard_B1ms` `max_connections`; KEDA Kafka scaler with SASL in Container Apps; Container Apps managed certificates for a custom domain.
 - Record the free trial's end date from the portal or billing CLI if available; otherwise note that Michael must check it.
 
 Implementation requirements:
@@ -95,7 +100,9 @@ Testing:
 - Offline: Bicep build and lint, `azd provision --preview` per phase.
 - P1: confirm resources exist, network rules applied, Key Vault secret names present (names only).
 - P2: through the public host, `GET /` 200, `GET /health/ready` 200, guest create 201, `/r/<code>` 302, WebSocket upgrade to Web succeeds; migration job exit 0.
-- P3: Analytics `/health/ready` 200 against Event Hubs; a test click flows outbox → Event Hubs → Analytics aggregate (use a test-only managed row as in the Slice 6 record if sign-in is not yet configured); the app observes the public host and `https` (verify forwarded headers); the scale demonstration results.
+- P1: confirm PostgreSQL has no public endpoint (`az postgres flexible-server show` network settings) and resolves to a private IP from inside the environment.
+- P2: Redis data survives a replica restart; each alert rule exists and its action group targets the budget email.
+- P3: Analytics `/health/ready` 200 against Event Hubs; a click on the managed demo link flows outbox → Event Hubs → Analytics aggregate; the app observes the public host and `https` (verify forwarded headers); the scale demonstration results.
 - Record what was not exercised, including live Entra sign-in until Michael adds redirect URIs.
 
 Documentation:
