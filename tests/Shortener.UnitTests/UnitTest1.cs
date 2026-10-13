@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Shortener.Application;
 using Shortener.Application.Interfaces;
 using Shortener.Domain;
@@ -68,7 +69,7 @@ public class UrlShortenerServiceTests
     public async Task ManagedCreationAllowsRepeatedDestinationsAndCodesRemainGlobal()
     {
         var repo = new TestRepository();
-        var service = new UrlShortenerService(repo, TimeProvider.System);
+        var service = CreateService(repo, new TestCache());
         var a = Guid.NewGuid();
         var b = Guid.NewGuid();
         var first = await service.CreateManagedAsync(a, "example.com", "code123");
@@ -93,21 +94,139 @@ public class UrlShortenerServiceTests
     public async Task GuestResolutionNeverRecordsAnalytics()
     {
         var repo = new TestRepository();
-        var service = new UrlShortenerService(repo, TimeProvider.System);
+        var service = CreateService(repo, new TestCache());
         var guest = await service.CreateGuestAsync("example.com", "guest123");
-        Assert.Same(guest, await service.ResolveAsync("guest123"));
+        Assert.Equal(guest.Id, (await service.ResolveAsync("guest123"))?.Id);
         Assert.Equal(0, guest.HitCount);
         Assert.Null(guest.LastAccessedAtUtc);
     }
 
+    [Fact]
+    public async Task CacheHitSkipsMappingReadButRecordsManagedHit()
+    {
+        var repo = new TestRepository();
+        var cache = new TestCache();
+        var service = CreateService(repo, cache);
+        var tenant = Guid.NewGuid();
+        var managed = await service.CreateManagedAsync(tenant, "example.com", "manage123");
+        Assert.Equal(managed.Id, (await service.ResolveAsync("MANAGE123"))?.Id);
+        Assert.Equal(0, repo.MappingReads);
+        Assert.Equal(1, managed.HitCount);
+        Assert.Equal(1, repo.ManagedHitWrites);
+        Assert.Equal(1, cache.SetCount);
+    }
+
+    [Fact]
+    public async Task MissAndCacheOutageFallBackToRepository()
+    {
+        var repo = new TestRepository();
+        var cache = new TestCache();
+        var service = CreateService(repo, cache);
+        var mapping = UrlMapping.CreateGuest("example.com", "guest123", TimeProvider.System.GetUtcNow());
+        Assert.True(await repo.TryAddAsync(mapping));
+        Assert.Equal(mapping.Id, (await service.ResolveAsync("guest123"))?.Id);
+        Assert.Equal(1, repo.MappingReads);
+        Assert.Equal(1, cache.SetCount);
+        cache.ThrowOnRead = true;
+        Assert.Equal(mapping.Id, (await service.ResolveAsync("guest123"))?.Id);
+        Assert.Equal(2, repo.MappingReads);
+    }
+
+    [Fact]
+    public async Task GuestCacheHitExpiresAtAbsoluteBoundaryAndTtlIsCapped()
+    {
+        var repo = new TestRepository();
+        var cache = new TestCache();
+        var clock = new TestClock();
+        var service = CreateService(repo, cache, clock);
+        await service.CreateGuestAsync("example.com", "guest123");
+        Assert.Equal(TimeSpan.FromHours(1), cache.LastTtl);
+        clock.Advance(TimeSpan.FromDays(7).Add(TimeSpan.FromTicks(-1)));
+        Assert.NotNull(await service.ResolveAsync("guest123"));
+        clock.Advance(TimeSpan.FromTicks(1));
+        Assert.Null(await service.ResolveAsync("guest123"));
+        Assert.Equal(0, repo.MappingReads);
+        Assert.Equal(0, repo.ManagedHitWrites);
+    }
+
+    [Fact]
+    public async Task DuplicateAndFailedCreationDoNotPublishDifferentRedirect()
+    {
+        var repo = new TestRepository();
+        var cache = new TestCache();
+        var service = CreateService(repo, cache);
+        var tenant = Guid.NewGuid();
+        var first = await service.CreateManagedAsync(tenant, "example.com", "manage123");
+        Assert.Equal(1, cache.SetCount);
+        var repeated = await service.CreateManagedWithOutcomeAsync(tenant, "example.com", "MANAGE123");
+        Assert.True(repeated.AlreadyExists);
+        Assert.Equal(first.Id, repeated.Mapping.Id);
+        Assert.Equal(1, cache.SetCount);
+        await Assert.ThrowsAsync<ShortCodeConflictException>(() => service.CreateGuestAsync("other.example", "manage123"));
+        Assert.Equal(1, cache.SetCount);
+        Assert.Equal(first.Id, (await service.ResolveAsync("manage123"))?.Id);
+    }
+
+    [Fact]
+    public async Task CacheWriteFailureAfterCommitDoesNotFailCreation()
+    {
+        var repo = new TestRepository();
+        var cache = new TestCache { ThrowOnWrite = true };
+        var service = CreateService(repo, cache);
+        var created = await service.CreateGuestAsync("example.com", "guest123");
+        Assert.Equal(created.Id, (await repo.GetByShortCodeAsync("guest123"))?.Id);
+        Assert.Equal(created.Id, (await service.ResolveAsync("guest123"))?.Id);
+    }
+
+    private static UrlShortenerService CreateService(TestRepository repo, TestCache cache, TimeProvider? clock = null) =>
+        new(repo, cache, clock ?? TimeProvider.System, NullLogger<UrlShortenerService>.Instance);
+
     private sealed class TestRepository : IUrlShortenerRepository
     {
         private readonly Dictionary<string, UrlMapping> _items = new(StringComparer.OrdinalIgnoreCase);
+        public int MappingReads { get; private set; }
+        public int ManagedHitWrites { get; private set; }
         public Task<bool> TryAddAsync(UrlMapping item, CancellationToken cancellationToken = default) => Task.FromResult(_items.TryAdd(item.ShortCode, item));
-        public Task<UrlMapping?> GetByShortCodeAsync(string code, CancellationToken cancellationToken = default) => Task.FromResult(_items.GetValueOrDefault(code));
+        public Task<UrlMapping?> GetByShortCodeAsync(string code, CancellationToken cancellationToken = default) { MappingReads++; return Task.FromResult(_items.GetValueOrDefault(code)); }
         public Task<UrlMapping?> GetManagedByShortCodeAsync(Guid tenant, string code, CancellationToken cancellationToken = default) => Task.FromResult(_items.GetValueOrDefault(code) is { Mode: LinkMode.Managed } m && m.TenantId == tenant ? m : null);
         public Task<UrlMapping?> GetManagedByOriginalUrlAsync(Guid tenant, string url, CancellationToken cancellationToken = default) => Task.FromResult(_items.Values.FirstOrDefault(x => x.Mode == LinkMode.Managed && x.TenantId == tenant && x.OriginalUrl == url));
         public Task<IReadOnlyCollection<UrlMapping>> GetManagedByTenantAsync(Guid tenant, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<UrlMapping>>(_items.Values.Where(x => x.Mode == LinkMode.Managed && x.TenantId == tenant).ToArray());
-        public Task RecordManagedHitAsync(UrlMapping mapping, DateTimeOffset now, CancellationToken cancellationToken = default) { mapping.RecordManagedHit(now); return Task.CompletedTask; }
+        public Task RecordManagedHitAsync(string mappingId, Guid tenantId, DateTimeOffset now, CancellationToken cancellationToken = default)
+        {
+            var mapping = _items.Values.Single(x => x.Id == mappingId && x.TenantId == tenantId);
+            mapping.RecordManagedHit(now);
+            ManagedHitWrites++;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class TestCache : IRedirectCache
+    {
+        private readonly Dictionary<string, RedirectTarget> _entries = new(StringComparer.OrdinalIgnoreCase);
+        public bool ThrowOnRead { get; set; }
+        public bool ThrowOnWrite { get; set; }
+        public int SetCount { get; private set; }
+        public TimeSpan LastTtl { get; private set; }
+        public Task<RedirectTarget?> GetAsync(string shortCode, CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnRead) throw new TimeoutException();
+            return Task.FromResult(_entries.GetValueOrDefault(shortCode));
+        }
+        public Task SetAsync(RedirectTarget target, TimeSpan ttl, CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnWrite) throw new TimeoutException();
+            _entries[target.ShortCode] = target;
+            SetCount++;
+            LastTtl = ttl;
+            return Task.CompletedTask;
+        }
+        public Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default) => Task.FromResult(!ThrowOnRead);
+    }
+
+    private sealed class TestClock : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 10, 13, 0, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan delta) => _now += delta;
     }
 }

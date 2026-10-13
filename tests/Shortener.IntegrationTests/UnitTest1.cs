@@ -12,10 +12,60 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Shortener.Application.Interfaces;
+using Shortener.Infrastructure;
+using StackExchange.Redis;
 
 [assembly: Xunit.CollectionBehavior(DisableTestParallelization = true)]
 
 namespace Shortener.IntegrationTests;
+
+public class RedisConnectionLifecycleTests
+{
+    [Fact]
+    public async Task TimedOutConnectionAttemptIsSharedAndFailedAttemptCanRetry()
+    {
+        var pending = new TaskCompletionSource<ConnectionMultiplexer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = 0;
+        await using var cache = new RedisRedirectCache("127.0.0.1:1", null, _ =>
+        {
+            attempts++;
+            return attempts == 1 ? pending.Task : Task.FromException<ConnectionMultiplexer>(new InvalidOperationException("Connect failed"));
+        });
+
+        Assert.False(await cache.IsAvailableAsync());
+        Assert.False(await cache.IsAvailableAsync());
+        Assert.Equal(1, attempts);
+
+        pending.SetException(new InvalidOperationException("Connect failed"));
+        Assert.False(await cache.IsAvailableAsync());
+        Assert.False(await cache.IsAvailableAsync());
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task ConnectionCompletingAfterCacheShutdownIsDisposed()
+    {
+        var redisConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Redis")
+            ?? throw new InvalidOperationException("Real Redis test connection must be provided in ConnectionStrings__Redis.");
+        await using var connection = await ConnectionMultiplexer.ConnectAsync(redisConnectionString);
+        await connection.GetDatabase().PingAsync();
+        var pending = new TaskCompletionSource<ConnectionMultiplexer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cache = new RedisRedirectCache(redisConnectionString, null, _ => pending.Task);
+        var disposed = false;
+        try
+        {
+            Assert.False(await cache.IsAvailableAsync());
+            await cache.DisposeAsync();
+            disposed = true;
+            pending.SetResult(connection);
+            Assert.True(SpinWait.SpinUntil(() => !connection.IsConnected, TimeSpan.FromSeconds(3)));
+        }
+        finally
+        {
+            if (!disposed) await cache.DisposeAsync();
+        }
+    }
+}
 
 public class ShortenerApiTests
 {
@@ -53,6 +103,52 @@ public class ShortenerApiTests
         Assert.Equal(0, reader.GetInt32(2));
         Assert.True(reader.GetBoolean(3));
         Assert.True(reader.GetBoolean(4));
+    }
+
+    [Fact]
+    public async Task RealRedisHitMissExpiryAndPostgresFallback()
+    {
+        using var factory = new TestFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+        await using var redis = await ConnectionMultiplexer.ConnectAsync(factory.RedisConnectionString);
+        var db = redis.GetDatabase();
+        Assert.Equal(RedisRedirectCache.KeyFor("MiXeD123", factory.RedisNamespace),
+            RedisRedirectCache.KeyFor("mixed123", factory.RedisNamespace));
+        var key = RedisRedirectCache.KeyFor("mixed123", factory.RedisNamespace);
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync("/api/urls/guest", new { originalUrl = "example.com", shortCode = "MiXeD123" })).StatusCode);
+        Assert.True(await db.KeyExistsAsync(key));
+        var ttl = await db.KeyTimeToLiveAsync(key);
+        Assert.True(ttl > TimeSpan.Zero && ttl <= TimeSpan.FromHours(1));
+
+        // With the mapping database unavailable, a cached guest redirect proves the hot read path.
+        using (var cacheOnly = new TestFactory(resetDatabase: false, unavailableDatabase: true, redisNamespace: factory.RedisNamespace))
+        using (var cacheOnlyClient = cacheOnly.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") }))
+            Assert.Equal(HttpStatusCode.Redirect, (await cacheOnlyClient.GetAsync("/r/mIxEd123")).StatusCode);
+
+        Assert.True(await db.KeyDeleteAsync(key));
+        Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync("/r/mixed123")).StatusCode);
+        Assert.True(await db.KeyExistsAsync(key)); // PostgreSQL miss fallback repopulated Redis.
+
+        using (var owner = ClientFor(factory, TenantA))
+            Assert.Equal(HttpStatusCode.Created, (await owner.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.org", shortCode = "cacheman" })).StatusCode);
+        Assert.True(await db.KeyExistsAsync(RedisRedirectCache.KeyFor("cacheman", factory.RedisNamespace)));
+        using (var cacheOnly = new TestFactory(resetDatabase: false, unavailableDatabase: true, redisNamespace: factory.RedisNamespace))
+        using (var cacheOnlyClient = cacheOnly.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") }))
+            Assert.Equal(HttpStatusCode.InternalServerError, (await cacheOnlyClient.GetAsync("/r/cacheman")).StatusCode);
+
+        factory.Clock.Advance(TimeSpan.FromDays(7));
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/r/MIXED123")).StatusCode);
+    }
+
+    [Fact]
+    public async Task RedisOutageMakesReadinessUnhealthyButPostgresRedirectWorks()
+    {
+        using var factory = new TestFactory(unavailableRedis: true);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/live")).StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.GetAsync("/health/ready")).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync("/api/urls/guest", new { originalUrl = "example.com", shortCode = "noRedis1" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync("/r/noRedis1")).StatusCode);
     }
 
     [Fact]
@@ -210,16 +306,24 @@ public class ShortenerApiTests
     private sealed class TestFactory : WebApplicationFactory<Program>
     {
         private readonly bool _unavailableDatabase;
+        private readonly bool _unavailableRedis;
         public string ConnectionString { get; }
+        public string RedisConnectionString { get; }
+        public string RedisNamespace { get; }
         public AdjustableClock Clock { get; } = new();
-        public TestFactory(bool resetDatabase = true, bool unavailableDatabase = false)
+        public TestFactory(bool resetDatabase = true, bool unavailableDatabase = false,
+            bool unavailableRedis = false, string? redisNamespace = null)
         {
             ConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__ShortenerDb")
                 ?? throw new InvalidOperationException("Real PostgreSQL test connection must be provided in ConnectionStrings__ShortenerDb.");
             var databaseName = new NpgsqlConnectionStringBuilder(ConnectionString).Database;
             if (databaseName != "Schwab_test_local")
                 throw new InvalidOperationException("Integration tests require the disposable database Schwab_test_local.");
+            RedisConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Redis")
+                ?? throw new InvalidOperationException("Real Redis test connection must be provided in ConnectionStrings__Redis.");
+            RedisNamespace = redisNamespace ?? "shortener:redirect:test:" + Guid.NewGuid().ToString("N");
             _unavailableDatabase = unavailableDatabase;
+            _unavailableRedis = unavailableRedis;
             if (!resetDatabase) return;
             using var connection = new NpgsqlConnection(ConnectionString);
             connection.Open();
@@ -237,7 +341,9 @@ public class ShortenerApiTests
             builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["AzureAd:ClientId"] = "11111111-1111-1111-1111-111111111111",
-                ["ConnectionStrings:ShortenerDb"] = apiConnectionString
+                ["ConnectionStrings:ShortenerDb"] = apiConnectionString,
+                ["ConnectionStrings:Redis"] = _unavailableRedis ? "127.0.0.1:1,abortConnect=false" : RedisConnectionString,
+                ["RedirectCache:Namespace"] = RedisNamespace
             }));
             builder.ConfigureTestServices(services =>
             {

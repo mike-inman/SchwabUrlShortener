@@ -47,12 +47,13 @@ public sealed class InMemoryUrlShortenerRepository : IUrlShortenerRepository
         lock (_gate) return Task.FromResult<IReadOnlyCollection<UrlMapping>>(_byCode.Values.Where(x => x.Mode == LinkMode.Managed && x.TenantId == tenantId).OrderByDescending(x => x.CreatedAtUtc).ToArray());
     }
 
-    public Task RecordManagedHitAsync(UrlMapping mapping, DateTimeOffset timestampUtc, CancellationToken cancellationToken = default)
+    public Task RecordManagedHitAsync(string mappingId, Guid tenantId, DateTimeOffset timestampUtc, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            if (!_byCode.TryGetValue(mapping.ShortCode, out var stored) || !ReferenceEquals(stored, mapping))
+            var stored = _byCode.Values.SingleOrDefault(x => x.Id == mappingId && x.TenantId == tenantId && x.Mode == LinkMode.Managed);
+            if (stored is null)
                 throw new InvalidOperationException("Managed link was not found.");
             stored.RecordManagedHit(timestampUtc);
         }
