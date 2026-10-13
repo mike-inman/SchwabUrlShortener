@@ -24,6 +24,12 @@ public sealed class EntraApiTokenProvider(
         async Task<string> AcquireAsync()
         {
             try { return await tokenAcquisition.GetAccessTokenForUserAsync([scope], user: user); }
+            catch (MicrosoftIdentityWebChallengeUserException ex)
+            {
+                logger.LogInformation("Managed API access requires renewed sign-in. ExceptionType={ExceptionType}",
+                    ex.GetType().Name);
+                throw new ManagedReauthenticationRequiredException();
+            }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogWarning("Managed API token acquisition failed. ExceptionType={ExceptionType} CorrelationId={CorrelationId}",
@@ -40,4 +46,7 @@ public sealed class UnconfiguredTokenProvider : IManagedApiTokenProvider
         throw new ManagedAccessUnavailableException("Managed sign-in is not configured.");
 }
 
-public sealed class ManagedAccessUnavailableException(string message) : Exception(message);
+public class ManagedAccessUnavailableException(string message) : Exception(message);
+
+public sealed class ManagedReauthenticationRequiredException() :
+    ManagedAccessUnavailableException("Your sign-in needs to be renewed to access managed links.");

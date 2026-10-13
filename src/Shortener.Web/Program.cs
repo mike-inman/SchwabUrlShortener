@@ -56,6 +56,10 @@ app.MapGet("/account/signin", (IdentityAvailability identity) =>
     identity.Configured
         ? Results.Challenge(new AuthenticationProperties { RedirectUri = "/dashboard" }, ["OpenIdConnect"])
         : Results.Problem("Managed sign-in is not configured.", statusCode: 503));
+app.MapGet("/account/renew", (IdentityAvailability identity) =>
+    identity.Configured
+        ? Results.Challenge(new AuthenticationProperties { RedirectUri = "/dashboard?reauth=1" }, ["OpenIdConnect"])
+        : Results.Problem("Managed sign-in is not configured.", statusCode: 503));
 app.MapPost("/account/signout", async (HttpContext context, IAntiforgery antiforgery, IdentityAvailability identity) =>
 {
     try { await antiforgery.ValidateRequestAsync(context); }

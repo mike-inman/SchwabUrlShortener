@@ -5,6 +5,7 @@
 @inject IShortenerApiClient Api
 @inject ILogger<Dashboard> Logger
 @inject IdentityAvailability Identity
+@inject NavigationManager Navigation
 
 <PageTitle>Managed links</PageTitle>
 @if (notice is not null)
@@ -41,6 +42,19 @@ else
 
     <section>
         <div class="section-heading"><h2>Your links</h2><span class="muted">Updates automatically</span></div>
+        @if (reauthRequired)
+        {
+            <p class="alert alert-warning" role="status">
+                @if (Reauth == "1")
+                {
+                    <text>We could not restore your managed-link access. <a href="/account/signin" class="alert-link">Sign in again</a>.</text>
+                }
+                else
+                {
+                    <text>Restoring your sign-in…</text>
+                }
+            </p>
+        }
         @if (liveUpdateError) { <p class="alert alert-warning" role="status">Live updates are temporarily unavailable. Reconnecting automatically.</p> }
         @if (busy) { <p role="status">Loading managed links…</p> }
         @if (error is not null) { <p class="alert alert-danger" role="alert">@error</p> }
@@ -79,6 +93,7 @@ else
 }
 
 @code {
+    [SupplyParameterFromQuery(Name = "reauth")] private string? Reauth { get; set; }
     [CascadingParameter] private Task<AuthenticationState> AuthenticationState { get; set; } = default!;
     private readonly LinkForm form = new();
     private IReadOnlyList<ManagedLink>? links;
@@ -88,6 +103,9 @@ else
     private CancellationTokenSource? noticeCancellation;
     private bool busy;
     private bool liveUpdateError;
+    private bool reauthRequired;
+    private bool renewalStarted;
+    private bool renewalReturnCleared;
     private string? error;
     private readonly CancellationTokenSource liveCancellation = new();
     private Task? liveTask;
@@ -99,7 +117,18 @@ else
 
     protected override Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && Identity.Configured) liveTask = WatchLinksAsync();
+        if (Reauth == "1" && !reauthRequired && !renewalReturnCleared)
+        {
+            renewalReturnCleared = true;
+            Navigation.NavigateTo("/dashboard", forceLoad: true, replace: true);
+        }
+        else if (reauthRequired && Reauth != "1" && !renewalStarted)
+        {
+            renewalStarted = true;
+            Navigation.NavigateTo("/account/renew", forceLoad: true);
+        }
+        else if (firstRender && Identity.Configured && !reauthRequired)
+            liveTask = WatchLinksAsync();
         return Task.CompletedTask;
     }
 
@@ -131,6 +160,12 @@ else
             }
         }
         catch (OperationCanceledException) when (liveCancellation.IsCancellationRequested) { }
+        catch (ManagedReauthenticationRequiredException ex)
+        {
+            HandleFailure(ex, "refresh managed links");
+            await liveCancellation.CancelAsync();
+            StateHasChanged();
+        }
         catch (Exception ex)
         {
             Logger.LogWarning("Managed dashboard live update failed. ExceptionType={ExceptionType}", ex.GetType().Name);
@@ -242,7 +277,15 @@ else
 
     private void HandleFailure(Exception ex, string operation)
     {
-        if (ex is ShortenerApiException or ManagedAccessUnavailableException)
+        if (ex is ManagedReauthenticationRequiredException)
+        {
+            reauthRequired = true;
+            liveUpdateError = false;
+            links = null;
+            selected = null;
+            error = null;
+        }
+        else if (ex is ShortenerApiException or ManagedAccessUnavailableException)
             error = ex.Message;
         else
         {

@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Bunit;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shortener.Web.Components.Pages;
@@ -116,6 +117,46 @@ public sealed class ComponentTests : BunitContext
         Assert.Contains("Loading managed links", view.Markup);
         pending.SetException(new ShortenerApiException("The shortener API is unavailable. Try again later."));
         view.WaitForAssertion(() => Assert.Contains("API is unavailable", view.Markup));
+    }
+
+    [Fact]
+    public void Dashboard_renews_the_session_when_the_token_cache_is_empty()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        api.List = _ => throw new ManagedReauthenticationRequiredException();
+        Render<Dashboard>();
+        var navigation = Services.GetRequiredService<NavigationManager>();
+        Assert.EndsWith("/account/renew", navigation.Uri);
+    }
+
+    [Fact]
+    public void Dashboard_stops_automatic_renewal_after_one_failed_attempt()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        api.List = _ => throw new ManagedReauthenticationRequiredException();
+        var navigation = Services.GetRequiredService<NavigationManager>();
+        navigation.NavigateTo("/dashboard?reauth=1");
+        var view = Render<Dashboard>();
+        Assert.Contains("could not restore", view.Markup);
+        Assert.Contains("Sign in again", view.Markup);
+        Assert.EndsWith("/dashboard?reauth=1", navigation.Uri);
+    }
+
+    [Fact]
+    public void Dashboard_clears_the_renewal_marker_after_access_is_restored()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        var navigation = Services.GetRequiredService<NavigationManager>();
+        navigation.NavigateTo("/dashboard?reauth=1");
+        Render<Dashboard>();
+        Assert.EndsWith("/dashboard", navigation.Uri);
     }
 
     private FakeApi Setup()
