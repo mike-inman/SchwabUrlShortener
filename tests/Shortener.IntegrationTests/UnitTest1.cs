@@ -349,6 +349,69 @@ public class ShortenerApiTests
         Assert.Equal(0L, counts.GetInt64(2));
     }
 
+    [Fact]
+    public async Task FailedPoisonDeadLetterWriteCannotSkipToLaterKafkaMessage()
+    {
+        var broker = Environment.GetEnvironmentVariable("Kafka__BootstrapServers")
+            ?? throw new InvalidOperationException("Real Kafka broker must be provided in Kafka__BootstrapServers.");
+        using var factory = new TestFactory();
+        using var owner = ClientFor(factory, TenantA);
+        Assert.Equal(HttpStatusCode.Created, (await owner.PostAsJsonAsync("/api/urls/managed",
+            new { originalUrl = "example.com", shortCode = "poisonnext" })).StatusCode);
+
+        await using var connection = new NpgsqlConnection(factory.ConnectionString);
+        await connection.OpenAsync();
+        await using var mapping = new NpgsqlCommand("SELECT id FROM url_mappings WHERE short_code = 'poisonnext'", connection);
+        var mappingId = Assert.IsType<string>(await mapping.ExecuteScalarAsync());
+        var validClick = new ManagedClickEventV1(Guid.NewGuid(), TenantA, mappingId, "poisonnext", DateTimeOffset.UtcNow, null);
+        var topic = "schwab-poison-retry-" + Guid.NewGuid().ToString("N");
+        using (var admin = new AdminClientBuilder(new AdminClientConfig { BootstrapServers = broker }).Build())
+            await admin.CreateTopicsAsync([new TopicSpecification { Name = topic, NumPartitions = 1, ReplicationFactor = 1 }]);
+        var options = new AnalyticsOptions(broker, topic, "schwab-poison-retry-" + Guid.NewGuid().ToString("N"));
+        using (var producer = new ProducerBuilder<string, string>(options.ProducerConfig()).Build())
+        {
+            await producer.ProduceAsync(topic, new Message<string, string> { Key = mappingId, Value = "{invalid-json" });
+            await producer.ProduceAsync(topic, new Message<string, string> { Key = mappingId, Value = JsonSerializer.Serialize(validClick) });
+        }
+
+        var timedConnection = new NpgsqlConnectionStringBuilder(factory.ConnectionString) { CommandTimeout = 1 };
+        await using var dataSource = new NpgsqlDataSourceBuilder(timedConnection.ConnectionString).Build();
+        using var consumer = new ClickKafkaConsumer(options, new PostgresClickEventStore(dataSource), NullLogger<ClickKafkaConsumer>.Instance);
+        await using var lockConnection = new NpgsqlConnection(factory.ConnectionString);
+        await lockConnection.OpenAsync();
+        await using var lockTransaction = await lockConnection.BeginTransactionAsync();
+        await using (var holdDeadLetters = new NpgsqlCommand("LOCK TABLE click_dead_letters IN ACCESS EXCLUSIVE MODE", lockConnection, lockTransaction))
+            await holdDeadLetters.ExecuteNonQueryAsync();
+        try
+        {
+            Assert.Equal(ConsumeOutcome.Retry, await ConsumeUntilAsync(consumer, ConsumeOutcome.Retry));
+            Assert.Equal(ConsumeOutcome.Retry, await ConsumeUntilAsync(consumer, ConsumeOutcome.Retry));
+            await using var before = new NpgsqlCommand("SELECT hit_count FROM url_mappings WHERE id = @id", connection);
+            before.Parameters.AddWithValue("id", mappingId);
+            Assert.Equal(0, await before.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await lockTransaction.RollbackAsync();
+        }
+
+        Assert.Equal(ConsumeOutcome.DeadLettered, await ConsumeUntilAsync(consumer, ConsumeOutcome.DeadLettered));
+        Assert.Equal(ConsumeOutcome.Applied, await ConsumeUntilAsync(consumer, ConsumeOutcome.Applied));
+        await using var verify = new NpgsqlCommand("""
+            SELECT (SELECT count(*) FROM click_dead_letters WHERE topic = @topic AND offset_id = 0 AND reason_code = 'invalid_json'),
+                   (SELECT hit_count FROM url_mappings WHERE id = @id),
+                   (SELECT count(*) FROM processed_click_events WHERE event_id = @event_id)
+            """, connection);
+        verify.Parameters.AddWithValue("topic", topic);
+        verify.Parameters.AddWithValue("id", mappingId);
+        verify.Parameters.AddWithValue("event_id", validClick.EventId);
+        await using var result = await verify.ExecuteReaderAsync();
+        Assert.True(await result.ReadAsync());
+        Assert.Equal(1L, result.GetInt64(0));
+        Assert.Equal(1, result.GetInt32(1));
+        Assert.Equal(1L, result.GetInt64(2));
+    }
+
     private static async Task<ConsumeOutcome> ConsumeUntilAsync(ClickKafkaConsumer consumer, ConsumeOutcome expected)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));

@@ -13,6 +13,7 @@ public sealed class ClickKafkaConsumer : IDisposable
     private readonly PostgresClickEventStore _store;
     private readonly ILogger<ClickKafkaConsumer> _logger;
     private TopicPartitionOffset? _lastFailure;
+    private TopicPartitionOffset? _pendingOffset;
     private int _failureCount;
 
     public ClickKafkaConsumer(AnalyticsOptions options, PostgresClickEventStore store, ILogger<ClickKafkaConsumer> logger)
@@ -25,8 +26,16 @@ public sealed class ClickKafkaConsumer : IDisposable
 
     public async Task<ConsumeOutcome> ConsumeOneAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
+        // A failed store or commit must be revisited even if a previous Seek failed.
+        if (_pendingOffset is not null) _consumer.Seek(_pendingOffset);
         var result = _consumer.Consume(timeout);
         if (result is null) return ConsumeOutcome.NoWork;
+        if (_pendingOffset is not null && _pendingOffset != result.TopicPartitionOffset)
+        {
+            _consumer.Seek(_pendingOffset);
+            return ConsumeOutcome.Retry;
+        }
+        _pendingOffset = result.TopicPartitionOffset;
         ManagedClickEventV1? click = null;
         try
         {
@@ -35,6 +44,7 @@ public sealed class ClickKafkaConsumer : IDisposable
                 throw new InvalidClickEventException("invalid_event");
             var applied = await _store.ApplyAsync(click, cancellationToken);
             _consumer.Commit(result);
+            _pendingOffset = null;
             _lastFailure = null;
             _failureCount = 0;
             if (applied) ClickAnalyticsMetrics.Consumed.Add(1); else ClickAnalyticsMetrics.Deduplicated.Add(1);
@@ -46,9 +56,22 @@ public sealed class ClickKafkaConsumer : IDisposable
         catch (Exception ex) when (ex is JsonException or InvalidClickEventException)
         {
             var reason = ex is InvalidClickEventException invalid ? invalid.Message : "invalid_json";
-            await _store.RecordDeadLetterAsync(result.Topic, result.Partition.Value, result.Offset.Value,
-                click?.EventId, reason, cancellationToken);
-            _consumer.Commit(result);
+            try
+            {
+                await _store.RecordDeadLetterAsync(result.Topic, result.Partition.Value, result.Offset.Value,
+                    click?.EventId, reason, cancellationToken);
+                _consumer.Commit(result);
+            }
+            catch (Exception deadLetterError) when (deadLetterError is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                CountFailure(result);
+                _logger.LogError("Click dead-letter persistence or offset commit failed; retrying same Kafka offset. ExceptionType={ExceptionType}",
+                    deadLetterError.GetType().Name);
+                return SeekForRetry(result, click, deadLetterError);
+            }
+            _pendingOffset = null;
+            _lastFailure = null;
+            _failureCount = 0;
             ClickAnalyticsMetrics.Failed.Add(1);
             _logger.LogWarning("Click dead-lettered. EventId={EventId} TenantId={TenantId} MappingId={MappingId} Reason={Reason}",
                 click?.EventId, click?.TenantId, click?.MappingId, reason);
@@ -56,11 +79,7 @@ public sealed class ClickKafkaConsumer : IDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            if (_lastFailure == result.TopicPartitionOffset) _failureCount++; else
-            {
-                _lastFailure = result.TopicPartitionOffset;
-                _failureCount = 1;
-            }
+            CountFailure(result);
             if (_failureCount >= MaximumProcessingAttempts)
             {
                 try
@@ -68,6 +87,7 @@ public sealed class ClickKafkaConsumer : IDisposable
                     await _store.RecordDeadLetterAsync(result.Topic, result.Partition.Value, result.Offset.Value,
                         click?.EventId, "processing_exhausted", cancellationToken);
                     _consumer.Commit(result);
+                    _pendingOffset = null;
                     ClickAnalyticsMetrics.Failed.Add(1);
                     _logger.LogError("Click processing exhausted and dead-lettered. EventId={EventId} TenantId={TenantId} MappingId={MappingId} ExceptionType={ExceptionType}",
                         click?.EventId, click?.TenantId, click?.MappingId, ex.GetType().Name);
@@ -81,12 +101,29 @@ public sealed class ClickKafkaConsumer : IDisposable
                         deadLetterError.GetType().Name);
                 }
             }
-            _consumer.Seek(result.TopicPartitionOffset);
-            ClickAnalyticsMetrics.Retried.Add(1);
-            _logger.LogWarning("Click processing retry. EventId={EventId} TenantId={TenantId} MappingId={MappingId} Attempt={Attempt} ExceptionType={ExceptionType}",
-                click?.EventId, click?.TenantId, click?.MappingId, _failureCount, ex.GetType().Name);
-            return ConsumeOutcome.Retry;
+            return SeekForRetry(result, click, ex);
         }
+    }
+
+    private void CountFailure(ConsumeResult<string, string> result)
+    {
+        if (_lastFailure == result.TopicPartitionOffset) _failureCount++; else
+        {
+            _lastFailure = result.TopicPartitionOffset;
+            _failureCount = 1;
+        }
+    }
+
+    private ConsumeOutcome SeekForRetry(ConsumeResult<string, string> result, ManagedClickEventV1? click, Exception error)
+    {
+        // Keep the marker until a successful commit. If Seek throws, the next call
+        // retries it before Consume can move forward.
+        _pendingOffset = result.TopicPartitionOffset;
+        _consumer.Seek(result.TopicPartitionOffset);
+        ClickAnalyticsMetrics.Retried.Add(1);
+        _logger.LogWarning("Click processing retry. EventId={EventId} TenantId={TenantId} MappingId={MappingId} Attempt={Attempt} ExceptionType={ExceptionType}",
+            click?.EventId, click?.TenantId, click?.MappingId, _failureCount, error.GetType().Name);
+        return ConsumeOutcome.Retry;
     }
 
     private void RecordLag(ConsumeResult<string, string> result)
