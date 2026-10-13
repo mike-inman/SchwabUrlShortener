@@ -8,6 +8,7 @@
 - Read-only `az group exists --name rg-shortener-staging` returned `false` at 17:57 CDT. This is a point-in-time result; recheck immediately before any creation. No resource group, application database, container, or other Azure resource was modified.
 - Read-only 18:10 checks reconfirmed the account/subscription/tenant and `rg-shortener-staging` absence. The signed-in account has `Owner` at this subscription scope. The PostgreSQL `Standard_D2ds_v5` General Purpose SKU appears in `centralus` capabilities. Azure provider metadata lists `centralus` for Container Apps managed environments and Event Hubs namespaces. Managed Redis B0/B1 regional eligibility still needs a live SKU check during the portal walkthrough; provider location metadata alone is insufficient.
 - The existing resource groups named in the contract remain outside this work. Do not modify or reuse them.
+- At 18:17 CDT, Michael supplied `BUDGET_CONTACT_EMAIL=social@mediaraq.com` and the existing Entra API application ID. Created local azd environment `staging` for the confirmed subscription, `centralus`, and `rg-shortener-staging`, and set the non-secret foundation values, including `API_CLIENT_ID`, the $600 budget contact, `Balanced_B0`, and bootstrap image sentinels. Targeted `azd env get-value` checks confirmed these non-secret values. The local azd `.env` is mode 0600 and Git-ignored; `POSTGRES_PASSWORD` is still unset pending Michael's private entry. The staging resource group still does not exist, and no Azure resource was created.
 
 ## Authored inventory
 
