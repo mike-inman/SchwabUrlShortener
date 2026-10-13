@@ -13,4 +13,4 @@ Tasks:
 
 Acceptance: imported kit stays unchanged; Web builds without warnings; existing guest and managed workflows remain covered; the home and dashboard are usable at 1280px and 390px without horizontal page scrolling; reduced motion and keyboard focus remain visible; only the Web container is rebuilt if live inspection is available.
 
-Outcome: pending validation.
+Outcome: the imported kit and Web implementation were committed separately. The Web build and focused tests pass, and the rebuilt Web container is healthy. Live desktop/mobile guest checks and their limits are recorded in `2026-10-13-1254-ziplio-branding-validation.md`.
