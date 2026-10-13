@@ -19,6 +19,54 @@ using StackExchange.Redis;
 
 namespace Shortener.IntegrationTests;
 
+public class RedisConnectionLifecycleTests
+{
+    [Fact]
+    public async Task TimedOutConnectionAttemptIsSharedAndFailedAttemptCanRetry()
+    {
+        var pending = new TaskCompletionSource<ConnectionMultiplexer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = 0;
+        await using var cache = new RedisRedirectCache("127.0.0.1:1", null, _ =>
+        {
+            attempts++;
+            return attempts == 1 ? pending.Task : Task.FromException<ConnectionMultiplexer>(new InvalidOperationException("Connect failed"));
+        });
+
+        Assert.False(await cache.IsAvailableAsync());
+        Assert.False(await cache.IsAvailableAsync());
+        Assert.Equal(1, attempts);
+
+        pending.SetException(new InvalidOperationException("Connect failed"));
+        Assert.False(await cache.IsAvailableAsync());
+        Assert.False(await cache.IsAvailableAsync());
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task ConnectionCompletingAfterCacheShutdownIsDisposed()
+    {
+        var redisConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Redis")
+            ?? throw new InvalidOperationException("Real Redis test connection must be provided in ConnectionStrings__Redis.");
+        await using var connection = await ConnectionMultiplexer.ConnectAsync(redisConnectionString);
+        await connection.GetDatabase().PingAsync();
+        var pending = new TaskCompletionSource<ConnectionMultiplexer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cache = new RedisRedirectCache(redisConnectionString, null, _ => pending.Task);
+        var disposed = false;
+        try
+        {
+            Assert.False(await cache.IsAvailableAsync());
+            await cache.DisposeAsync();
+            disposed = true;
+            pending.SetResult(connection);
+            Assert.True(SpinWait.SpinUntil(() => !connection.IsConnected, TimeSpan.FromSeconds(3)));
+        }
+        finally
+        {
+            if (!disposed) await cache.DisposeAsync();
+        }
+    }
+}
+
 public class ShortenerApiTests
 {
     private static readonly Guid TenantA = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");

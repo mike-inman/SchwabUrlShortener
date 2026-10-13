@@ -5,12 +5,28 @@ using StackExchange.Redis;
 
 namespace Shortener.Infrastructure;
 
-public sealed class RedisRedirectCache(string? connectionString, string? keyNamespace = null) : IRedirectCache, IAsyncDisposable
+public sealed class RedisRedirectCache : IRedirectCache, IAsyncDisposable
 {
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromMilliseconds(750);
     private readonly SemaphoreSlim _connectGate = new(1, 1);
+    private readonly string? _connectionString;
+    private readonly string? _keyNamespace;
+    private readonly Func<ConfigurationOptions, Task<ConnectionMultiplexer>> _connectAsync;
     private ConnectionMultiplexer? _connection;
+    private Task<ConnectionMultiplexer>? _connecting;
+    private bool _disposed;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public RedisRedirectCache(string? connectionString, string? keyNamespace = null)
+        : this(connectionString, keyNamespace, options => ConnectionMultiplexer.ConnectAsync(options)) { }
+
+    internal RedisRedirectCache(string? connectionString, string? keyNamespace,
+        Func<ConfigurationOptions, Task<ConnectionMultiplexer>> connectAsync)
+    {
+        _connectionString = connectionString;
+        _keyNamespace = keyNamespace;
+        _connectAsync = connectAsync;
+    }
 
     public static string KeyFor(string shortCode, string? keyNamespace = null)
     {
@@ -25,7 +41,7 @@ public sealed class RedisRedirectCache(string? connectionString, string? keyName
     public async Task<RedirectTarget?> GetAsync(string shortCode, CancellationToken cancellationToken = default)
     {
         var db = (await GetConnectionAsync(cancellationToken)).GetDatabase();
-        var value = await db.StringGetAsync(KeyFor(shortCode, keyNamespace)).WaitAsync(OperationTimeout, cancellationToken);
+        var value = await db.StringGetAsync(KeyFor(shortCode, _keyNamespace)).WaitAsync(OperationTimeout, cancellationToken);
         return value.IsNull ? null : JsonSerializer.Deserialize<RedirectTarget>((string)value!, JsonOptions);
     }
 
@@ -34,14 +50,14 @@ public sealed class RedisRedirectCache(string? connectionString, string? keyName
         if (ttl <= TimeSpan.Zero) return;
         var db = (await GetConnectionAsync(cancellationToken)).GetDatabase();
         var value = JsonSerializer.Serialize(target, JsonOptions);
-        await db.StringSetAsync(KeyFor(target.ShortCode, keyNamespace), value, ttl).WaitAsync(OperationTimeout, cancellationToken);
+        await db.StringSetAsync(KeyFor(target.ShortCode, _keyNamespace), value, ttl).WaitAsync(OperationTimeout, cancellationToken);
     }
 
     public async Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            _ = KeyFor("health", keyNamespace);
+            _ = KeyFor("health", _keyNamespace);
             var db = (await GetConnectionAsync(cancellationToken)).GetDatabase();
             await db.PingAsync().WaitAsync(OperationTimeout, cancellationToken);
             return true;
@@ -52,29 +68,63 @@ public sealed class RedisRedirectCache(string? connectionString, string? keyName
 
     private async Task<ConnectionMultiplexer> GetConnectionAsync(CancellationToken cancellationToken)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_connection is { } existing) return existing;
         if (!await _connectGate.WaitAsync(OperationTimeout, cancellationToken))
             throw new TimeoutException("Redis connection wait exceeded the redirect cache limit.");
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_connection is { } connected) return connected;
-            if (string.IsNullOrWhiteSpace(connectionString))
+            if (string.IsNullOrWhiteSpace(_connectionString))
                 throw new InvalidOperationException("ConnectionStrings:Redis must be configured for redirect caching.");
-            var options = ConfigurationOptions.Parse(connectionString);
-            options.AbortOnConnectFail = false;
-            options.ConnectRetry = 0;
-            options.ConnectTimeout = 500;
-            options.AsyncTimeout = 500;
-            options.BacklogPolicy = BacklogPolicy.FailFast;
-            _connection = await ConnectionMultiplexer.ConnectAsync(options).WaitAsync(OperationTimeout, cancellationToken);
-            return _connection;
+            if (_connecting is null)
+            {
+                var options = ConfigurationOptions.Parse(_connectionString);
+                options.AbortOnConnectFail = false;
+                options.ConnectRetry = 0;
+                options.ConnectTimeout = 500;
+                options.AsyncTimeout = 500;
+                options.BacklogPolicy = BacklogPolicy.FailFast;
+                _connecting = _connectAsync(options);
+            }
+            var pending = _connecting ?? throw new InvalidOperationException("Redis connection attempt was not started.");
+            try
+            {
+                _connection = await pending.WaitAsync(OperationTimeout, cancellationToken);
+                _connecting = null;
+                return _connection;
+            }
+            catch
+            {
+                // A timed-out wait leaves the connection attempt running. Keep it for the next caller.
+                // Only a completed failure may be retried with a new attempt.
+                if (pending.IsFaulted || pending.IsCanceled) _connecting = null;
+                throw;
+            }
         }
         finally { _connectGate.Release(); }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_connection is { } connection) await connection.DisposeAsync();
-        _connectGate.Dispose();
+        await _connectGate.WaitAsync();
+        try
+        {
+            _disposed = true;
+            if (_connection is { } connection) await connection.DisposeAsync();
+            else if (_connecting is { } pending) _ = DisposeLateConnectionAsync(pending);
+        }
+        finally
+        {
+            _connectGate.Release();
+            _connectGate.Dispose();
+        }
+    }
+
+    private static async Task DisposeLateConnectionAsync(Task<ConnectionMultiplexer> pending)
+    {
+        try { await (await pending).DisposeAsync(); }
+        catch { /* A failed connection has no resource to release. */ }
     }
 }
