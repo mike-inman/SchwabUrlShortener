@@ -46,3 +46,10 @@ The benchmark emitted no bearer token, cookie, redirect destination, full URL, o
 To turn this baseline into acceptance gates, the operator must supply the deployment environment and hardware shape; guest/managed traffic mix; sustained and burst request rates; p95/p99 latency and error objectives; availability; analytics freshness and retention; recovery time/data-loss requirements; and representative link cardinality/cache working set. Then run a separate authorized workload in that environment with metrics export and alerting. No numeric SLO or “high-volume-ready” claim follows from this note.
 
 Cleanup completed: `docker compose -p schwab-slice7-check ... down --volumes --remove-orphans` removed only that project and its four named volumes. A subsequent inventory still showed all six `schwab-url-shortener-*` containers and both named Schwab volumes. Commit identity and final Git state are reported in the handoff.
+
+## Closeout state
+
+The six handoff criteria were ticked with evidence pointers.
+Closeout verification: the solution build passed with zero warnings/errors; filtered host tests passed unit 25/25 and Web 38/38, with integration excluded.
+The `codex/slice-7-scale-validation` branch was pushed, and `main` was fast-forwarded to this closeout commit (resulting `main` hash: `git rev-parse main` after publication).
+The open gaps above remain unchanged: live Entra, authenticated load cases, and per-event trace correlation.

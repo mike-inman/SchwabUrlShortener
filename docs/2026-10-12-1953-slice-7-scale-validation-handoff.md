@@ -71,9 +71,10 @@ Documentation:
 - Update README and architecture docs surgically; preserve the assignment framing and avoid unsupported capacity claims.
 
 Completion criteria:
-- [ ] Full solution build and tests are recorded.
-- [ ] A bounded, reproducible load baseline reports conditions and measured outcomes.
-- [ ] Guest-link expiry and no-analytics behavior are validated.
-- [ ] Failure/recovery checks distinguish real-service evidence from test doubles.
-- [ ] No numeric SLO or high-volume readiness claim is invented.
-- [ ] Documentation lists unverified production requirements and exact next decisions.
+- [x] Full solution build and tests are recorded. (Closeout: "Environment and reproducible commands"; 83/83 in the disposable container, with the host-only integration failure at the intentional guarded-database precondition.)
+- [x] A bounded, reproducible load baseline reports conditions and measured outcomes. (Closeout: "Bounded measurements".)
+- [x] Guest-link expiry and no-analytics behavior are validated. (Closeout: "Correctness and bounded failures", first bullet.)
+- [x] Failure/recovery checks distinguish real-service evidence from test doubles. (Closeout: "Correctness and bounded failures", Redis, PostgreSQL, and Kafka bullets.)
+- [x] No numeric SLO or high-volume readiness claim is invented. (Closeout: "Implementation versus acceptance".)
+- [x] Documentation lists unverified production requirements and exact next decisions. (Closeout: "Implementation versus acceptance", final two paragraphs.)
+Closed out on 2026-10-13; merged to `main` by fast-forward.
