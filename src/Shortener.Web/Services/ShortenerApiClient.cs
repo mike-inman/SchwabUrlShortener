@@ -11,7 +11,7 @@ public sealed record CreatedLink(string ShortCode, string OriginalUrl, string Sh
     DateTimeOffset CreatedAtUtc, DateTimeOffset? ExpiresAtUtc);
 public sealed record ManagedLink(string ShortCode, string OriginalUrl, DateTimeOffset CreatedAtUtc,
     DateTimeOffset? LastAccessedAtUtc, int HitCount);
-public sealed record LinkResult(CreatedLink Link, Uri PublicUrl);
+public sealed record LinkResult(CreatedLink Link, Uri PublicUrl, bool AlreadyExists = false);
 
 public interface IShortenerApiClient
 {
@@ -62,8 +62,8 @@ public sealed class ShortenerApiClient : IShortenerApiClient
     {
         using var message = await AuthorizedRequestAsync(HttpMethod.Post, "api/urls/managed", user, cancellationToken);
         message.Content = JsonContent.Create(request);
-        var link = await SendAsync<CreatedLink>(message, "create managed link", cancellationToken);
-        return new(link, PublicUrl(link.ShortCode));
+        var (link, status) = await SendWithStatusAsync<CreatedLink>(message, "create managed link", cancellationToken);
+        return new(link, PublicUrl(link.ShortCode), AlreadyExists: status == HttpStatusCode.OK);
     }
 
     public async Task<IReadOnlyList<ManagedLink>> GetManagedLinksAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default)
@@ -99,6 +99,9 @@ public sealed class ShortenerApiClient : IShortenerApiClient
     }
 
     private async Task<T> SendAsync<T>(HttpRequestMessage message, string operation, CancellationToken cancellationToken)
+        => (await SendWithStatusAsync<T>(message, operation, cancellationToken)).Value;
+
+    private async Task<(T Value, HttpStatusCode Status)> SendWithStatusAsync<T>(HttpRequestMessage message, string operation, CancellationToken cancellationToken)
     {
         _ = BaseUri;
         try
@@ -118,7 +121,7 @@ public sealed class ShortenerApiClient : IShortenerApiClient
                 });
             }
             var value = await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
-            return value ?? throw new JsonException("Empty API response");
+            return (value ?? throw new JsonException("Empty API response"), response.StatusCode);
         }
         catch (HttpRequestException ex)
         {

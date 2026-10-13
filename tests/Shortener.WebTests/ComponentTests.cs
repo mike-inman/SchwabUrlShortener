@@ -59,10 +59,49 @@ public sealed class ComponentTests : BunitContext
         Assert.Contains("abc", view.Markup);
         view.Find("#managed-url").Change("https://example.com");
         await view.Find("form").SubmitAsync();
-        view.WaitForAssertion(() => Assert.Contains("Created:", view.Markup));
+        view.WaitForAssertion(() => Assert.Contains("Link created", view.Markup));
+        Assert.DoesNotContain(">Refresh</button>", view.Markup);
+        Assert.Contains("selected-link", view.Markup);
         await view.Find("button.btn-sm").ClickAsync();
         view.WaitForAssertion(() => Assert.Contains("Redirects: 4", view.Markup));
-        Assert.True(api.AuthenticatedCalls >= 4);
+        Assert.Contains("Details for", view.Markup);
+        Assert.True(api.AuthenticatedCalls >= 3);
+    }
+
+    [Fact]
+    public async Task Dashboard_duplicate_notice_does_not_claim_creation()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        api.ManagedCreate = _ => Task.FromResult(new LinkResult(Created,
+            new Uri("https://api.example.test/r/abc"), AlreadyExists: true));
+        var view = Render<Dashboard>();
+        view.Find("#managed-url").Change("https://example.com");
+        await view.Find("form").SubmitAsync();
+        view.WaitForAssertion(() => Assert.Contains("Link already exists", view.Markup));
+        Assert.DoesNotContain("Link created", view.Markup);
+        Assert.Contains("Details for", view.Markup);
+        view.WaitForAssertion(() => Assert.DoesNotContain("Link already exists", view.Markup), TimeSpan.FromSeconds(9));
+        Assert.Contains("Details for", view.Markup);
+    }
+
+    [Fact]
+    public void Dashboard_updates_redirect_counts_without_a_refresh_button()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        var snapshot = Managed;
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([snapshot]);
+        api.Analytics = _ => Task.FromResult(snapshot);
+        var view = Render<Dashboard>();
+        view.WaitForAssertion(() => Assert.Contains("Redirects", view.Markup));
+        Assert.DoesNotContain(">Refresh</button>", view.Markup);
+        view.Find("button.btn-sm").Click();
+        snapshot = Managed with { HitCount = 5 };
+        view.WaitForAssertion(() => { Assert.Contains("<td>5</td>", view.Markup); Assert.Contains("Redirects: 5", view.Markup); }, TimeSpan.FromSeconds(8));
     }
 
     [Fact]

@@ -48,13 +48,22 @@ public sealed class ApiClientTests
                         ? Json(HttpStatusCode.OK, "[" + ManagedJson + "]")
                         : Json(HttpStatusCode.OK, ManagedJson);
         });
-        await client.CreateManagedAsync(new("https://example.com", "abc"), User);
+        Assert.False((await client.CreateManagedAsync(new("https://example.com", "abc"), User)).AlreadyExists);
         var links = await client.GetManagedLinksAsync(User);
         await client.GetManagedLinkAsync("abc", User);
         var analytics = await client.GetManagedAnalyticsAsync("abc", User);
         Assert.Single(links);
         Assert.Equal(3, analytics.HitCount);
         Assert.Equal(["/api/urls/managed", "/api/urls/managed/analytics", "/api/urls/managed/abc", "/api/urls/managed/abc/analytics"], paths);
+    }
+
+    [Fact]
+    public async Task Managed_existing_link_is_reported_as_existing()
+    {
+        var client = MakeClient(_ => Json(HttpStatusCode.OK, CreatedJson));
+        var result = await client.CreateManagedAsync(new("https://example.com", "abc"), User);
+        Assert.True(result.AlreadyExists);
+        Assert.Equal("abc", result.Link.ShortCode);
     }
 
     [Theory]

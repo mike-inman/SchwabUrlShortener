@@ -65,6 +65,15 @@ public class ShortenerApiTests
         Assert.Equal(HttpStatusCode.Unauthorized, (await anon.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com" })).StatusCode);
         var created = await a.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com", shortCode = "manag123", tenantId = TenantB });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var repeatedCode = await a.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com", shortCode = "manag123" });
+        Assert.Equal(HttpStatusCode.OK, repeatedCode.StatusCode);
+        Assert.Equal("manag123", (await repeatedCode.Content.ReadFromJsonAsync<CreateUrlResponse>())!.ShortCode);
+        var generatedOne = await a.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com" });
+        var generatedTwo = await a.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com" });
+        Assert.Equal(HttpStatusCode.Created, generatedOne.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, generatedTwo.StatusCode);
+        Assert.NotEqual((await generatedOne.Content.ReadFromJsonAsync<CreateUrlResponse>())!.ShortCode,
+            (await generatedTwo.Content.ReadFromJsonAsync<CreateUrlResponse>())!.ShortCode);
         Assert.Equal(HttpStatusCode.NotFound, (await b.GetAsync("/api/urls/managed/manag123")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await b.GetAsync("/api/urls/managed/manag123/analytics")).StatusCode);
         Assert.Empty((await b.GetFromJsonAsync<ManagedUrlResponse[]>("/api/urls/managed/analytics"))!);

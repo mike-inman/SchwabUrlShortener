@@ -15,3 +15,16 @@ article > section { margin-top: 2.5rem; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 .destination { max-width: 300px; overflow-wrap: anywhere; }
 #blazor-error-ui { display: none; background: #fff3cd; bottom: 0; left: 0; position: fixed; width: 100%; padding: 1rem; }
+
+.table .selected-link > * { --bs-table-bg: #e8f2ff; background-color: #e8f2ff; }
+.table .selected-link > :first-child { box-shadow: inset 4px 0 #0d6efd; }
+
+.dashboard-toast-container { z-index: 1080; margin-top: 4.5rem; }
+.dashboard-toast { animation: toast-slide-in .24s ease-out; }
+.dashboard-toast.notice-success { border-left: 4px solid #198754; }
+.dashboard-toast.notice-info { border-left: 4px solid #0d6efd; }
+@keyframes toast-slide-in { from { opacity: 0; transform: translateY(-1rem); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .dashboard-toast { animation: none; } }
+.dashboard-toast.dismissing { animation: toast-slide-out .3s ease-in forwards; }
+@keyframes toast-slide-out { to { opacity: 0; transform: translateY(-.75rem); } }
+@media (prefers-reduced-motion: reduce) { .dashboard-toast.dismissing { animation: none; } }

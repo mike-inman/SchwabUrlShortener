@@ -1,4 +1,4 @@
-# SchwabUrlShortener agent guide — 2026-10-12
+# SchwabUrlShortener agent guide — 2026-10-12 (updated 2026-10-13)
 
 This repository is the .NET 10 starter solution for the Schwab URL shortener assignment. All eight generated projects are in `SchwabUrlShortener.slnx`. The current tests are template tests; passing them does not establish URL shortener behavior.
 
@@ -35,6 +35,11 @@ Keep business rules out of host projects and do not add a dependency from Domain
 - For API, worker, or external integration changes, make failures inspectable: preserve useful exception context, use structured and sanitized logs, carry request or operation correlation IDs where available, and give callers safe, actionable errors. For background work, consider retry, duplicate processing, and durable failure handling before claiming operational reliability.
 - After a substantive edit, run the narrowest useful check first. For solution or project changes, run `dotnet build SchwabUrlShortener.slnx` and `dotnet test SchwabUrlShortener.slnx`. Preserve existing tests; add meaningful tests for new behavior rather than treating the template tests as acceptance.
 - Distinguish implementation, local test results, real service verification, deployment, and operational acceptance. State which environment and paths were exercised, plus any remaining blockers.
+
+## Live operator UI
+
+- Operator-facing values that change while a page is open must update automatically. Do not add manual Refresh controls. Use the existing Blazor Interactive Server WebSocket connection or another appropriate live transport, and keep access tenant-scoped.
+- Make duplicate outcomes explicit, and keep details associated with a visibly selected link.
 
 ## Finish and hand off
 

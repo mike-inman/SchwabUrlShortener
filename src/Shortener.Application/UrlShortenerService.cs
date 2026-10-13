@@ -16,28 +16,32 @@ public sealed class UrlShortenerService : IUrlShortenerService
         _clock = clock;
     }
 
-    public Task<UrlMapping> CreateGuestAsync(string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
-        => CreateAsync(null, originalUrl, requestedShortCode, cancellationToken);
+    public async Task<UrlMapping> CreateGuestAsync(string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+        => (await CreateAsync(null, originalUrl, requestedShortCode, cancellationToken)).Mapping;
 
-    public Task<UrlMapping> CreateManagedAsync(Guid tenantId, string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+    public async Task<UrlMapping> CreateManagedAsync(Guid tenantId, string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+        => (await CreateManagedWithOutcomeAsync(tenantId, originalUrl, requestedShortCode, cancellationToken)).Mapping;
+
+    public Task<ManagedCreateResult> CreateManagedWithOutcomeAsync(Guid tenantId, string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
     {
         if (tenantId == Guid.Empty) throw new ArgumentException("A valid tenant is required.", nameof(tenantId));
         return CreateAsync(tenantId, originalUrl, requestedShortCode, cancellationToken);
     }
 
-    private async Task<UrlMapping> CreateAsync(Guid? tenantId, string originalUrl, string? requestedShortCode, CancellationToken cancellationToken)
+    private async Task<ManagedCreateResult> CreateAsync(Guid? tenantId, string originalUrl, string? requestedShortCode, CancellationToken cancellationToken)
     {
         var normalizedUrl = UrlValidation.NormalizeUrl(originalUrl);
         if (!UrlValidation.IsValidAbsoluteUrl(normalizedUrl))
             throw new ArgumentException("Original URL must be an absolute http or https URL.", nameof(originalUrl));
 
-        if (tenantId is { } owner)
-        {
-            var existing = await _repository.GetManagedByOriginalUrlAsync(owner, normalizedUrl, cancellationToken);
-            if (existing is not null) return existing;
-        }
-
         var custom = !string.IsNullOrWhiteSpace(requestedShortCode);
+        // A destination may have many generated links. Only an explicit code can identify a repeat request.
+        if (tenantId is { } owner && custom)
+        {
+            var existing = await _repository.GetManagedByShortCodeAsync(owner, requestedShortCode!.Trim(), cancellationToken);
+            if (existing is not null && existing.OriginalUrl == normalizedUrl)
+                return new(existing, AlreadyExists: true);
+        }
         for (var attempt = 0; attempt < 10; attempt++)
         {
             var code = custom ? requestedShortCode!.Trim() : GenerateShortCode();
@@ -45,8 +49,17 @@ public sealed class UrlShortenerService : IUrlShortenerService
             var mapping = tenantId is { } id
                 ? UrlMapping.CreateManaged(normalizedUrl, code, id, now)
                 : UrlMapping.CreateGuest(normalizedUrl, code, now);
-            if (await _repository.TryAddAsync(mapping, cancellationToken)) return mapping;
-            if (custom) throw new ShortCodeConflictException();
+            if (await _repository.TryAddAsync(mapping, cancellationToken)) return new(mapping, AlreadyExists: false);
+            if (custom)
+            {
+                if (tenantId is { } ownerOnConflict)
+                {
+                    var existing = await _repository.GetManagedByShortCodeAsync(ownerOnConflict, code, cancellationToken);
+                    if (existing is not null && existing.OriginalUrl == normalizedUrl)
+                        return new(existing, AlreadyExists: true);
+                }
+                throw new ShortCodeConflictException();
+            }
         }
         throw new InvalidOperationException("Could not allocate a unique short code. Try again.");
     }

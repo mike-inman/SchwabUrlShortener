@@ -82,8 +82,10 @@ app.MapPost("/api/urls/managed", async (CreateUrlRequest request, ClaimsPrincipa
     if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
     try
     {
-        var mapping = await service.CreateManagedAsync(tenantId, request.OriginalUrl, request.ShortCode, cancellationToken);
-        return Results.Created($"/api/urls/managed/{mapping.ShortCode}", ToCreateResponse(mapping));
+        var outcome = await service.CreateManagedWithOutcomeAsync(tenantId, request.OriginalUrl, request.ShortCode, cancellationToken);
+        return outcome.AlreadyExists
+            ? Results.Ok(ToCreateResponse(outcome.Mapping))
+            : Results.Created($"/api/urls/managed/{outcome.Mapping.ShortCode}", ToCreateResponse(outcome.Mapping));
     }
     catch (ArgumentException ex) { return Results.BadRequest(new ApiError(ex.Message)); }
     catch (ShortCodeConflictException ex) { return Results.Conflict(new ApiError(ex.Message)); }

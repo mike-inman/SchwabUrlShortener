@@ -1,4 +1,5 @@
 @page "/dashboard"
+@implements IAsyncDisposable
 @attribute [Authorize]
 @rendermode InteractiveServer
 @inject IShortenerApiClient Api
@@ -6,6 +7,18 @@
 @inject IdentityAvailability Identity
 
 <PageTitle>Managed links</PageTitle>
+@if (notice is not null)
+{
+    <div class="toast-container position-fixed top-0 end-0 p-3 dashboard-toast-container" aria-live="polite" aria-atomic="true">
+        <div class="toast show dashboard-toast @notice.Kind @(noticeDismissing ? "dismissing" : null)" role="status">
+            <div class="toast-header">
+                <strong class="me-auto">@notice.Title</strong>
+                <button type="button" class="btn-close" aria-label="Close notification" @onclick="DismissNotice"></button>
+            </div>
+            <div class="toast-body">@notice.Message</div>
+        </div>
+    </div>
+}
 <h1>Managed links</h1>
 <p class="lead">Create persistent links for your signed-in organization and review redirect counts.</p>
 
@@ -24,14 +37,11 @@ else
             <input id="managed-code" class="form-control" maxlength="64" @bind="form.ShortCode" />
             <button class="btn btn-primary" type="submit" disabled="@busy">@(busy ? "Creating…" : "Create managed link")</button>
         </EditForm>
-        @if (created is not null)
-        {
-            <p class="alert alert-success" role="status">Created: <a href="@created.PublicUrl" target="_blank" rel="noopener noreferrer">@created.PublicUrl</a></p>
-        }
     </section>
 
     <section>
-        <div class="section-heading"><h2>Your links</h2><button class="btn btn-outline-secondary" disabled="@busy" @onclick="LoadAsync">Refresh</button></div>
+        <div class="section-heading"><h2>Your links</h2><span class="muted">Updates automatically</span></div>
+        @if (liveUpdateError) { <p class="alert alert-warning" role="status">Live updates are temporarily unavailable. Reconnecting automatically.</p> }
         @if (busy) { <p role="status">Loading managed links…</p> }
         @if (error is not null) { <p class="alert alert-danger" role="alert">@error</p> }
         @if (!busy && links is not null && links.Count == 0) { <p>No managed links yet.</p> }
@@ -43,13 +53,13 @@ else
                     <tbody>
                         @foreach (var link in links)
                         {
-                            <tr>
+                            <tr class="@(selected?.ShortCode == link.ShortCode ? "selected-link" : null)" aria-selected="@(selected?.ShortCode == link.ShortCode)">
                                 <td><a href="@Api.PublicUrl(link.ShortCode)" target="_blank" rel="noopener noreferrer">@link.ShortCode</a></td>
                                 <td class="destination">@link.OriginalUrl</td>
                                 <td>@link.CreatedAtUtc.ToLocalTime().ToString("g")</td>
                                 <td>@link.HitCount</td>
                                 <td>@(link.LastAccessedAtUtc?.ToLocalTime().ToString("g") ?? "Never")</td>
-                                <td><button class="btn btn-sm btn-outline-primary" disabled="@busy" @onclick="() => ShowDetailsAsync(link.ShortCode)">Details</button></td>
+                                <td><button class="btn btn-sm btn-outline-primary" disabled="@busy" aria-label="Details for @link.ShortCode" @onclick="() => ShowDetailsAsync(link.ShortCode)">Details</button></td>
                             </tr>
                         }
                     </tbody>
@@ -60,7 +70,7 @@ else
     @if (selected is not null)
     {
         <section class="result">
-            <h2>Link details: @selected.ShortCode</h2>
+            <h2>Details for <a href="@Api.PublicUrl(selected.ShortCode)" target="_blank" rel="noopener noreferrer">@selected.ShortCode</a></h2>
             <p>Destination: @selected.OriginalUrl</p>
             <p>Redirects: @selected.HitCount</p>
             <p>Last accessed: @(selected.LastAccessedAtUtc?.ToLocalTime().ToString("f") ?? "Never")</p>
@@ -73,13 +83,73 @@ else
     private readonly LinkForm form = new();
     private IReadOnlyList<ManagedLink>? links;
     private ManagedLink? selected;
-    private LinkResult? created;
+    private ToastNotice? notice;
+    private bool noticeDismissing;
+    private CancellationTokenSource? noticeCancellation;
     private bool busy;
+    private bool liveUpdateError;
     private string? error;
+    private readonly CancellationTokenSource liveCancellation = new();
+    private Task? liveTask;
 
     protected override async Task OnInitializedAsync()
     {
         if (Identity.Configured) await LoadAsync();
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && Identity.Configured) liveTask = WatchLinksAsync();
+        return Task.CompletedTask;
+    }
+
+    private async Task WatchLinksAsync()
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+            while (await timer.WaitForNextTickAsync(liveCancellation.Token))
+                await InvokeAsync(RefreshLiveAsync);
+        }
+        catch (OperationCanceledException) when (liveCancellation.IsCancellationRequested) { }
+    }
+
+    private async Task RefreshLiveAsync()
+    {
+        if (busy) return;
+        try
+        {
+            var latest = await Api.GetManagedLinksAsync((await AuthenticationState).User, liveCancellation.Token);
+            var changed = links is null || !latest.SequenceEqual(links);
+            links = latest;
+            if (selected is not null)
+                selected = latest.FirstOrDefault(link => link.ShortCode == selected.ShortCode);
+            if (changed || liveUpdateError)
+            {
+                liveUpdateError = false;
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException) when (liveCancellation.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            Logger.LogWarning("Managed dashboard live update failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+            liveUpdateError = true;
+            StateHasChanged();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await liveCancellation.CancelAsync();
+        if (liveTask is not null)
+        {
+            try { await liveTask; }
+            catch (OperationCanceledException) { }
+        }
+        liveCancellation.Dispose();
+        noticeCancellation?.Cancel();
+        noticeCancellation?.Dispose();
     }
 
     private async Task LoadAsync()
@@ -95,12 +165,15 @@ else
     {
         busy = true;
         error = null;
-        created = null;
         try
         {
             var user = (await AuthenticationState).User;
-            created = await Api.CreateManagedAsync(new(form.OriginalUrl, string.IsNullOrWhiteSpace(form.ShortCode) ? null : form.ShortCode.Trim()), user);
+            var result = await Api.CreateManagedAsync(new(form.OriginalUrl, string.IsNullOrWhiteSpace(form.ShortCode) ? null : form.ShortCode.Trim()), user);
             links = await Api.GetManagedLinksAsync(user);
+            selected = links.FirstOrDefault(link => link.ShortCode == result.Link.ShortCode);
+            ShowNotice(result.AlreadyExists ? "Link already exists" : "Link created",
+                result.AlreadyExists ? $"You already have short link {result.Link.ShortCode}." : $"Short link {result.Link.ShortCode} is ready.",
+                result.AlreadyExists ? "notice-info" : "notice-success");
         }
         catch (Exception ex) { HandleFailure(ex, "create managed link"); }
         finally { busy = false; }
@@ -120,6 +193,50 @@ else
         catch (Exception ex) { HandleFailure(ex, "load link analytics"); }
         finally { busy = false; }
     }
+
+    private void ShowNotice(string title, string message, string kind)
+    {
+        noticeCancellation?.Cancel();
+        noticeCancellation?.Dispose();
+        notice = new(title, message, kind);
+        noticeDismissing = false;
+        noticeCancellation = new CancellationTokenSource();
+        _ = DismissAfterDelayAsync(notice, noticeCancellation.Token);
+    }
+
+    private async Task DismissAfterDelayAsync(ToastNotice shownNotice, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(6.7), cancellationToken);
+            await InvokeAsync(() =>
+            {
+                if (ReferenceEquals(notice, shownNotice))
+                {
+                    noticeDismissing = true;
+                    StateHasChanged();
+                }
+            });
+            await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
+            await InvokeAsync(() =>
+            {
+                if (ReferenceEquals(notice, shownNotice))
+                {
+                    notice = null;
+                    StateHasChanged();
+                }
+            });
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void DismissNotice()
+    {
+        noticeCancellation?.Cancel();
+        notice = null;
+    }
+
+    private sealed record ToastNotice(string Title, string Message, string Kind);
 
     private void HandleFailure(Exception ex, string operation)
     {

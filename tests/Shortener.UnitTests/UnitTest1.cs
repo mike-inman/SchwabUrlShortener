@@ -65,7 +65,7 @@ public class UrlValidationTests
 public class UrlShortenerServiceTests
 {
     [Fact]
-    public async Task ManagedOriginalLookupIsTenantScopedAndCodeIsGlobal()
+    public async Task ManagedCreationAllowsRepeatedDestinationsAndCodesRemainGlobal()
     {
         var repo = new TestRepository();
         var service = new UrlShortenerService(repo, TimeProvider.System);
@@ -74,7 +74,16 @@ public class UrlShortenerServiceTests
         var first = await service.CreateManagedAsync(a, "example.com", "code123");
         var second = await service.CreateManagedAsync(b, "example.com", "code456");
         Assert.NotEqual(first.Id, second.Id);
-        Assert.Equal(first.Id, (await service.CreateManagedAsync(a, "example.com" )).Id);
+        var repeatedCode = await service.CreateManagedWithOutcomeAsync(a, "example.com", "code123");
+        Assert.True(repeatedCode.AlreadyExists);
+        Assert.Equal(first.Id, repeatedCode.Mapping.Id);
+        var generatedOne = await service.CreateManagedWithOutcomeAsync(a, "example.com");
+        var generatedTwo = await service.CreateManagedWithOutcomeAsync(a, "example.com");
+        Assert.False(generatedOne.AlreadyExists);
+        Assert.False(generatedTwo.AlreadyExists);
+        Assert.NotEqual(first.ShortCode, generatedOne.Mapping.ShortCode);
+        Assert.NotEqual(generatedOne.Mapping.ShortCode, generatedTwo.Mapping.ShortCode);
+        await Assert.ThrowsAsync<ShortCodeConflictException>(() => service.CreateManagedAsync(a, "other.example", "code123"));
         await Assert.ThrowsAsync<ShortCodeConflictException>(() => service.CreateGuestAsync("other.example", "code123"));
         Assert.Null(await service.GetManagedAsync(b, "code123"));
         Assert.Single(await service.GetManagedAnalyticsAsync(b));
