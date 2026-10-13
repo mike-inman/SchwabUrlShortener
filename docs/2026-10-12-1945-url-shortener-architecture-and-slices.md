@@ -2,6 +2,8 @@
 
 Status: superseded for implementation sequencing by [the 2026-10-12 production-minded slice plan](./2026-10-12-1953-production-ready-slices-and-handoffs.md). Retained as historical architecture rationale.
 
+2026-10-13 closeout clarification: “production readiness” below describes intended design concerns, not demonstrated capacity or operational acceptance. The [Slice 7 measured local baseline and remaining gates](./2026-10-13-1441-slice-7-scale-validation-closeout.md) supersede any implied performance claim here.
+
 ## 1) Interview-ready answer: how to frame the assignment and the high-volume requirement
 
 The assignment is a focused URL shortener exercise, but the job description tells us the broader engineering lens: this is not just about building a short link service in isolation; it is about showing we can design for scale, resiliency, observability, and production-minded engineering while still keeping the implementation appropriately scoped for a time-boxed exercise.

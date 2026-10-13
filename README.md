@@ -1,6 +1,6 @@
 # Schwab URL Shortener Prototype
 
-Updated: 2026-10-13 14:12 CDT
+Updated: 2026-10-13 14:41 CDT
 
 This repository contains a .NET 10 URL shortener prototype. Anonymous guest links expire after seven days. Workforce managed links use the validated token's tenant; customer managed links use application workspaces and memberships. PostgreSQL stores links, managed click outbox events, and aggregate counts. Redis caches public redirect mappings. Kafka carries managed click events to the Analytics worker. A Blazor Server app provides guest creation and a signed-in managed dashboard.
 
@@ -40,6 +40,8 @@ For the Web app, configure `ShortenerApi:BaseUrl` with the server-to-server API 
 For a portable Docker installation or a single-server custom-domain deployment, use the dated [deployment guide](docs/2026-10-13-1239-portable-local-and-custom-domain-deployment.md). It provides private sample environment files, explicit migrations, public proxy routes, and verification commands. Existing local `.env` files are not used or changed by that workflow.
 
 The [Slice 6 validation record](docs/2026-10-13-1310-slice-6-compose-observability-validation.md) separates the real local Compose results from live Entra and cloud acceptance. Its disposable test profile runs the guarded full solution suite against real PostgreSQL, Redis, and Kafka.
+
+The [2026-10-13 Slice 7 scale validation closeout](docs/2026-10-13-1441-slice-7-scale-validation-closeout.md) records an isolated 83/83 full-suite run with real PostgreSQL, Redis, and Kafka for the integration tests, a capped loopback load sample, and bounded dependency interruption and recovery checks. Use `scripts/load-local.py` only with a fresh disposable local Compose project and `--local-test-only`; it caps each case at 500 requests and concurrency at 8. The sample is a local baseline, not a production capacity target or live identity check. Acceptance still needs an agreed traffic profile, latency/error/availability objectives, analytics freshness and retention, recovery requirements, and deployment environment.
 
 ## Existing local Docker Compose bundle
 
