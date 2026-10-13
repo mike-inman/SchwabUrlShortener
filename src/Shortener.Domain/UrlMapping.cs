@@ -9,6 +9,7 @@ public sealed class UrlMapping
     public string OriginalUrl { get; private init; } = string.Empty;
     public LinkMode Mode { get; private init; }
     public Guid? TenantId { get; private init; }
+    public Guid? OwnerWorkspaceId { get; private set; }
     public DateTimeOffset CreatedAtUtc { get; private init; }
     public DateTimeOffset? ExpiresAtUtc { get; private init; }
     public DateTimeOffset? LastAccessedAtUtc { get; private set; }

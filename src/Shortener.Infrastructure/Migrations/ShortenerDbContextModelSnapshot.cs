@@ -54,6 +54,10 @@ namespace Shortener.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("original_url");
 
+                    b.Property<Guid?>("OwnerWorkspaceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_workspace_id");
+
                     b.Property<string>("ShortCode")
                         .IsRequired()
                         .HasMaxLength(12)
@@ -65,6 +69,9 @@ namespace Shortener.Infrastructure.Migrations
                         .HasColumnName("tenant_id");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("OwnerWorkspaceId")
+                        .HasDatabaseName("ix_url_mappings_owner_workspace");
 
                     b.HasIndex("ShortCode")
                         .IsUnique()
@@ -80,6 +87,258 @@ namespace Shortener.Infrastructure.Migrations
                         {
                             t.HasCheckConstraint("ck_url_mappings_link_mode", "(mode = 0 AND tenant_id IS NULL AND expires_at_utc IS NOT NULL AND expires_at_utc = created_at_utc + INTERVAL '168 hours' AND last_accessed_at_utc IS NULL AND hit_count = 0) OR (mode = 1 AND tenant_id IS NOT NULL AND tenant_id <> '00000000-0000-0000-0000-000000000000'::uuid AND expires_at_utc IS NULL AND hit_count >= 0)");
                         });
+                });
+
+            modelBuilder.Entity("Shortener.Infrastructure.ApplicationUser", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ContactEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("contact_email");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("display_name");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("application_users", (string)null);
+                });
+
+            modelBuilder.Entity("Shortener.Infrastructure.ExternalIdentity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("Issuer")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("issuer");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("subject");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("Issuer", "Subject")
+                        .IsUnique()
+                        .HasDatabaseName("ux_external_identities_issuer_subject");
+
+                    b.ToTable("external_identities", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_external_identity_key", "length(trim(issuer)) > 0 AND length(trim(subject)) > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Shortener.Infrastructure.Workspace", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<short>("Kind")
+                        .HasColumnType("smallint")
+                        .HasColumnName("kind");
+
+                    b.Property<Guid?>("LegacyTenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("legacy_tenant_id");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<Guid?>("PersonalOwnerUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("personal_owner_user_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LegacyTenantId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_workspaces_legacy_tenant");
+
+                    b.HasIndex("PersonalOwnerUserId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_workspaces_personal_owner");
+
+                    b.ToTable("workspaces", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_workspaces_kind_owner", "(kind = 0 AND personal_owner_user_id IS NOT NULL AND legacy_tenant_id IS NULL) OR (kind = 1 AND personal_owner_user_id IS NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("Shortener.Infrastructure.WorkspaceInvitation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTimeOffset>("ExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at_utc");
+
+                    b.Property<DateTimeOffset?>("RedeemedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("redeemed_at_utc");
+
+                    b.Property<Guid?>("RedeemedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("redeemed_by_user_id");
+
+                    b.Property<DateTimeOffset?>("RevokedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at_utc");
+
+                    b.Property<string>("VerifierHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("verifier_hash");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("workspace_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RedeemedByUserId");
+
+                    b.HasIndex("VerifierHash")
+                        .IsUnique()
+                        .HasDatabaseName("ux_workspace_invitations_verifier_hash");
+
+                    b.HasIndex("WorkspaceId");
+
+                    b.ToTable("workspace_invitations", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_workspace_invitations_expiry", "expires_at_utc > created_at_utc");
+
+                            t.HasCheckConstraint("ck_workspace_invitations_state", "(redeemed_at_utc IS NULL) = (redeemed_by_user_id IS NULL) AND NOT (redeemed_at_utc IS NOT NULL AND revoked_at_utc IS NOT NULL) AND (redeemed_at_utc IS NULL OR (redeemed_at_utc >= created_at_utc AND redeemed_at_utc <= expires_at_utc)) AND (revoked_at_utc IS NULL OR revoked_at_utc >= created_at_utc)");
+
+                            t.HasCheckConstraint("ck_workspace_invitations_verifier", "verifier_hash ~ '^[0-9a-f]{64}$'");
+                        });
+                });
+
+            modelBuilder.Entity("Shortener.Infrastructure.WorkspaceMembership", b =>
+                {
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("workspace_id");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<short>("Role")
+                        .HasColumnType("smallint")
+                        .HasColumnName("role");
+
+                    b.HasKey("WorkspaceId", "UserId");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("WorkspaceId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_workspace_memberships_one_owner")
+                        .HasFilter("role = 0");
+
+                    b.ToTable("workspace_memberships", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_workspace_memberships_role", "role IN (0, 1, 2)");
+                        });
+                });
+
+            modelBuilder.Entity("Shortener.Domain.UrlMapping", b =>
+                {
+                    b.HasOne("Shortener.Infrastructure.Workspace", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerWorkspaceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Shortener.Infrastructure.ExternalIdentity", b =>
+                {
+                    b.HasOne("Shortener.Infrastructure.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Shortener.Infrastructure.Workspace", b =>
+                {
+                    b.HasOne("Shortener.Infrastructure.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("PersonalOwnerUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Shortener.Infrastructure.WorkspaceInvitation", b =>
+                {
+                    b.HasOne("Shortener.Infrastructure.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("RedeemedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Shortener.Infrastructure.Workspace", null)
+                        .WithMany()
+                        .HasForeignKey("WorkspaceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Shortener.Infrastructure.WorkspaceMembership", b =>
+                {
+                    b.HasOne("Shortener.Infrastructure.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Shortener.Infrastructure.Workspace", null)
+                        .WithMany()
+                        .HasForeignKey("WorkspaceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }
