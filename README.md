@@ -1,6 +1,6 @@
 # Schwab URL Shortener Prototype
 
-Updated: 2026-10-13 05:42 CDT
+Updated: 2026-10-13 13:10 CDT
 
 This repository contains a .NET 10 URL shortener prototype. Anonymous guest links expire after seven days; Entra-authenticated managed links belong to the validated token's tenant. PostgreSQL stores links, managed click outbox events, and aggregate counts. Redis caches public redirect mappings. Kafka carries managed click events to the Analytics worker. A Blazor Server app provides guest creation and a signed-in managed dashboard.
 
@@ -35,7 +35,11 @@ This repository contains a .NET 10 URL shortener prototype. Anonymous guest link
 
 Create responses contain a relative `shortUrl` such as `/r/demo1`; the serving domain is chosen by deployment. Short codes are unique across both link modes.
 
-For the Web app, configure `ShortenerApi:BaseUrl` with the API origin and `ShortenerApi:Scope` with the API's delegated scope. Configure `AzureAd:Instance`, `AzureAd:TenantId`, `AzureAd:ClientId`, and `AzureAd:ClientSecret` for the Web app registration in its separate local secret store or environment, then run `dotnet run --project src/Shortener.Web/Shortener.Web.csproj`. The Web app keeps tokens and the client secret on the server. Guest creation remains available without Web sign-in configuration. The app registration must allow the Web callback URL used locally.
+For the Web app, configure `ShortenerApi:BaseUrl` with the server-to-server API origin and `PublicLinks:BaseUrl` with the public origin used in generated links. The latter must be HTTPS or loopback HTTP and must end at the origin root. Non-loopback HTTP for the internal API requires the explicit `ShortenerApi:AllowHttpInternal=true` setting; use it only on a private container network. Configure `ShortenerApi:Scope` with the API's delegated scope. Configure `AzureAd:Instance`, `AzureAd:TenantId`, `AzureAd:ClientId`, and `AzureAd:ClientSecret` for the Web app registration in its separate local secret store or environment, then run `dotnet run --project src/Shortener.Web/Shortener.Web.csproj`. The Web app keeps tokens and the client secret on the server. Guest creation remains available without Web sign-in configuration. The app registration must allow the Web callback URL used locally.
+
+For a portable Docker installation or a single-server custom-domain deployment, use the dated [deployment guide](docs/2026-10-13-1239-portable-local-and-custom-domain-deployment.md). It provides private sample environment files, explicit migrations, public proxy routes, and verification commands. Existing local `.env` files are not used or changed by that workflow.
+
+The [Slice 6 validation record](docs/2026-10-13-1310-slice-6-compose-observability-validation.md) separates the real local Compose results from live Entra and cloud acceptance. Its disposable test profile runs the guarded full solution suite against real PostgreSQL, Redis, and Kafka.
 
 ## Scenarios
 

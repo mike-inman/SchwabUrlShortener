@@ -46,7 +46,7 @@
         catch (ShortenerApiException ex) { error = ex.Message; }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Guest link creation failed unexpectedly");
+            Logger.LogError("Guest link creation failed unexpectedly. ExceptionType={ExceptionType}", ex.GetType().Name);
             error = "Unable to create the link right now. Try again later.";
         }
         finally { busy = false; }

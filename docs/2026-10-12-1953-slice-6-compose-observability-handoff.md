@@ -1,5 +1,5 @@
 ## Slice 6 — Docker Compose and Observability Handoff
-Status: drafted on 2026-10-12
+Status: locally implemented and validated on 2026-10-13; see `docs/2026-10-13-1310-slice-6-compose-observability-validation.md`. Changes remain uncommitted by user request.
 You are working in /Users/michaelinman/Repos/SchwabUrlShortener.
 
 Follow these repo standards exactly:
@@ -67,7 +67,7 @@ Documentation:
 - Record the exact commands run and distinguish local container verification from production deployment/acceptance.
 
 Completion criteria:
-- [ ] Compose defines all required runtime services with readiness checks.
-- [ ] PostgreSQL migrations and real Redis/Kafka integrations run without fake fallbacks.
-- [ ] No secret value or local credential file is committed or changed.
-- [ ] A documented end-to-end local flow succeeds and its real-service boundaries are stated.
+- [x] Compose defines all required runtime services with readiness checks.
+- [x] PostgreSQL migrations and real Redis/Kafka integrations run without fake fallbacks.
+- [x] No secret value or local credential file is committed or changed.
+- [x] A documented end-to-end local flow succeeds and its real-service boundaries are stated.

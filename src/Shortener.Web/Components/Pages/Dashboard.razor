@@ -289,7 +289,7 @@ else
             error = ex.Message;
         else
         {
-            Logger.LogError(ex, "Managed UI operation failed: {Operation}", operation);
+            Logger.LogError("Managed UI operation failed. Operation={Operation} ExceptionType={ExceptionType}", operation, ex.GetType().Name);
             error = "Unable to complete this operation. Try again later.";
         }
     }

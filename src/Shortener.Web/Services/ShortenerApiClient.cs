@@ -29,6 +29,7 @@ public sealed class ShortenerApiClient : IShortenerApiClient
     private readonly IManagedApiTokenProvider _tokens;
     private readonly ILogger<ShortenerApiClient> _logger;
     private readonly Uri? _baseUri;
+    private readonly Uri? _publicBaseUri;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public ShortenerApiClient(HttpClient http, IManagedApiTokenProvider tokens,
@@ -38,17 +39,24 @@ public sealed class ShortenerApiClient : IShortenerApiClient
         _tokens = tokens;
         _logger = logger;
         var configured = configuration["ShortenerApi:BaseUrl"];
+        var allowInternalHttp = configuration.GetValue<bool>("ShortenerApi:AllowHttpInternal");
         if (Uri.TryCreate(configured, UriKind.Absolute, out var uri) &&
-            (uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback)) &&
+            (uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && (uri.IsLoopback || allowInternalHttp))) &&
             uri.AbsolutePath == "/" && string.IsNullOrEmpty(uri.UserInfo) &&
             string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment))
         {
             _baseUri = new Uri(uri.GetLeftPart(UriPartial.Authority) + "/");
             _http.BaseAddress = _baseUri;
         }
+        var publicConfigured = configuration["PublicLinks:BaseUrl"];
+        if (Uri.TryCreate(publicConfigured, UriKind.Absolute, out var publicUri) &&
+            (publicUri.Scheme == Uri.UriSchemeHttps || (publicUri.Scheme == Uri.UriSchemeHttp && publicUri.IsLoopback)) &&
+            publicUri.AbsolutePath == "/" && string.IsNullOrEmpty(publicUri.UserInfo) &&
+            string.IsNullOrEmpty(publicUri.Query) && string.IsNullOrEmpty(publicUri.Fragment))
+            _publicBaseUri = new Uri(publicUri.GetLeftPart(UriPartial.Authority) + "/");
     }
 
-    public Uri PublicUrl(string shortCode) => new(BaseUri, "r/" + Uri.EscapeDataString(shortCode));
+    public Uri PublicUrl(string shortCode) => new(PublicBaseUri, "r/" + Uri.EscapeDataString(shortCode));
 
     public async Task<LinkResult> CreateGuestAsync(CreateLinkRequest request, CancellationToken cancellationToken = default)
     {
@@ -85,6 +93,7 @@ public sealed class ShortenerApiClient : IShortenerApiClient
     }
 
     private Uri BaseUri => _baseUri ?? throw new ShortenerApiException("The shortener API address is not configured.");
+    private Uri PublicBaseUri => _publicBaseUri ?? throw new ShortenerApiException("The public link address is not configured.");
 
     private static string ManagedPath(string shortCode) => "api/urls/managed/" + Uri.EscapeDataString(shortCode);
 

@@ -3,6 +3,7 @@
 .DS_Store
 .env
 .env.*
+/deploy/*.env
 .claude/
 .codex/
 /docs/010 - Assignment - AI-Proficient Software Engineer 1.pdf

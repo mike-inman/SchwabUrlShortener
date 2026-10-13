@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Identity.Web;
@@ -11,7 +12,25 @@ using Shortener.Application.Interfaces;
 using Shortener.Domain;
 using Shortener.Infrastructure;
 
+if (args.Contains("--healthcheck", StringComparer.Ordinal))
+{
+    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
+    try
+    {
+        using var response = await client.GetAsync("http://localhost:8080/health/ready");
+        Environment.ExitCode = response.IsSuccessStatusCode ? 0 : 1;
+    }
+    catch (HttpRequestException) { Environment.ExitCode = 1; }
+    catch (TaskCanceledException) { Environment.ExitCode = 1; }
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole();
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
+ConfigureTrustedProxy(builder);
 
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton(TimeProvider.System);
@@ -57,6 +76,7 @@ app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
         exception?.GetType().Name, exception?.StackTrace, context.TraceIdentifier);
     await Results.Problem(title: "Unable to process the request.", statusCode: 500).ExecuteAsync(context);
 }));
+app.UseForwardedHeaders();
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.Use(async (context, next) =>
@@ -67,6 +87,8 @@ app.Use(async (context, next) =>
     await next(context);
 });
 app.UseAuthorization();
+app.Lifetime.ApplicationStarted.Register(() => app.Logger.LogInformation("Service started. Service={Service}", "api"));
+app.Lifetime.ApplicationStopping.Register(() => app.Logger.LogInformation("Service stopping. Service={Service}", "api"));
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false }).AllowAnonymous();
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") }).AllowAnonymous();
@@ -123,7 +145,33 @@ app.MapGet("/api/urls/managed/analytics", async (ClaimsPrincipal principal, Http
     return Results.Ok(mappings.Select(ToManagedResponse).ToArray());
 }).WithName("GetManagedAnalytics").RequireAuthorization();
 
+if (args.Contains("--migrate", StringComparer.Ordinal))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    await using var db = await scope.ServiceProvider.GetRequiredService<IDbContextFactory<ShortenerDbContext>>().CreateDbContextAsync();
+    await db.Database.MigrateAsync();
+    return;
+}
+
 app.Run();
+
+static void ConfigureTrustedProxy(WebApplicationBuilder builder)
+{
+    var proxyHost = builder.Configuration["ForwardedHeaders:KnownProxyHost"];
+    if (string.IsNullOrWhiteSpace(proxyHost)) return;
+    var addresses = System.Net.Dns.GetHostAddresses(proxyHost);
+    if (addresses.Length == 0) throw new InvalidOperationException("The configured reverse proxy could not be resolved.");
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
+        options.ForwardLimit = 1;
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+        foreach (var address in addresses) options.KnownProxies.Add(address);
+        var publicUrl = builder.Configuration["PublicLinks:BaseUrl"];
+        if (Uri.TryCreate(publicUrl, UriKind.Absolute, out var uri)) options.AllowedHosts.Add(uri.Host);
+    });
+}
 
 static bool TryGetTenant(ClaimsPrincipal principal, HttpContext context, out Guid tenantId)
 {

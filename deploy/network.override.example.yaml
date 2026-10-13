@@ -1,0 +1,7 @@
+# 2026-10-13: optional only when Docker's automatic address pools are exhausted.
+# Choose a private subnet unused by this host, VPN, and existing Docker networks.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.251.42.0/24

@@ -27,7 +27,7 @@ public sealed class ApiClientTests
         });
         var result = await client.CreateGuestAsync(new("https://example.com", null));
         Assert.Equal(1, calls);
-        Assert.Equal("https://api.example.test/r/abc", result.PublicUrl.ToString());
+        Assert.Equal("https://go.example.test/r/abc", result.PublicUrl.ToString());
         Assert.Equal(new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero), result.Link.ExpiresAtUtc);
     }
 
@@ -94,9 +94,36 @@ public sealed class ApiClientTests
         Assert.Contains("not configured", ex.Message);
     }
 
-    private static ShortenerApiClient MakeClient(Func<HttpRequestMessage, HttpResponseMessage> respond, string? baseUrl = "https://api.example.test/")
+    [Fact]
+    public async Task Explicit_internal_http_api_never_appears_in_public_link()
     {
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["ShortenerApi:BaseUrl"] = baseUrl }).Build();
+        var client = MakeClient(request =>
+        {
+            Assert.Equal("http://api:8080/api/urls/guest", request.RequestUri!.ToString());
+            return Json(HttpStatusCode.Created, CreatedJson);
+        }, "http://api:8080/", allowInternalHttp: true, publicUrl: "http://localhost:8080/");
+        var result = await client.CreateGuestAsync(new("https://example.com", "abc"));
+        Assert.Equal("http://localhost:8080/r/abc", result.PublicUrl.ToString());
+        Assert.DoesNotContain("api:8080", result.PublicUrl.ToString());
+    }
+
+    [Fact]
+    public void Missing_or_unsafe_public_origin_is_rejected()
+    {
+        Assert.Throws<ShortenerApiException>(() => MakeClient(_ => throw new Exception(), publicUrl: null).PublicUrl("abc"));
+        Assert.Throws<ShortenerApiException>(() => MakeClient(_ => throw new Exception(), publicUrl: "http://go.example.test/").PublicUrl("abc"));
+        Assert.Throws<ShortenerApiException>(() => MakeClient(_ => throw new Exception(), publicUrl: "https://go.example.test/other/").PublicUrl("abc"));
+    }
+
+    private static ShortenerApiClient MakeClient(Func<HttpRequestMessage, HttpResponseMessage> respond,
+        string? baseUrl = "https://api.example.test/", bool allowInternalHttp = false, string? publicUrl = "https://go.example.test/")
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ShortenerApi:BaseUrl"] = baseUrl,
+            ["ShortenerApi:AllowHttpInternal"] = allowInternalHttp.ToString(),
+            ["PublicLinks:BaseUrl"] = publicUrl
+        }).Build();
         return new(new HttpClient(new DelegateHandler(respond)), new TestTokenProvider(), config, NullLogger<ShortenerApiClient>.Instance);
     }
 
