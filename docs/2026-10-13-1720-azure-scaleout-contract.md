@@ -1,6 +1,6 @@
 # Azure scale-out contract — 2026-10-13 17:20 CDT
 
-Status: agreed baseline for Tracks A, B, and C. Change it only by editing this file and telling every active track.
+Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Change it only by editing this file and telling every active track.
 
 ## Purpose
 
@@ -27,6 +27,17 @@ This contract fixes the names and values the tracks share, so no track waits on 
 - Container Apps environment subnet: `10.60.0.0/23`, delegated to `Microsoft.App/environments`.
 - Private endpoint subnet: `10.60.4.0/24`.
 - Reserved, unused: `10.60.5.0/24` (future PostgreSQL delegated subnet if private access is switched from private endpoint to VNet injection).
+
+## Image build (Track C)
+
+The root `Dockerfile` has stages `api`, `web`, and `analytics`, selected with `--target` and build arg `PROJECT`. The `azure.yaml` schema has no Docker target setting, and the `Dockerfile` stays unchanged. So:
+
+- `infra/scripts/build-images.sh` runs `az acr build --registry <acr> --target <stage> --build-arg PROJECT=<csproj> --file Dockerfile .` once per service, from the repo root. Projects: `src/Shortener.Api/Shortener.Api.csproj`, `src/Shortener.Web/Shortener.Web.csproj`, `src/Shortener.Analytics/Shortener.Analytics.csproj`.
+- It reads each pushed image's digest and runs `azd env set SERVICE_API_IMAGE <acr>/shortener-api@sha256:...` (likewise `SERVICE_WEB_IMAGE`, `SERVICE_ANALYTICS_IMAGE`).
+- `azure.yaml` declares each service with `host: containerapp` and `image: ${SERVICE_<NAME>_IMAGE}` (prebuilt-image form) and runs the script as a `predeploy` hook.
+- The migration job uses `SERVICE_API_IMAGE`.
+
+Remote ACR builds mean no local Docker is needed, and images are always deployed by digest.
 
 ## Public routing (mirrors `deploy/Caddyfile.*`)
 
@@ -81,14 +92,14 @@ At most one of `KnownProxyHost` or `KnownNetworks` may be set; both set fails at
 
 - API, Azure: `AllowedHosts` = the public host (Front Door endpoint host or custom domain) and `ca-shortener-api-stg`.
 - Web, Azure: `AllowedHosts` = the public host.
-- `ShortenerApi__BaseUrl` = `http://ca-shortener-api-stg/`, `ShortenerApi__AllowHttpInternal` = `true`.
+- `ShortenerApi__BaseUrl` = `http://ca-shortener-api-stg/` and `ShortenerApi__AllowedInternalHttpHosts` = `ca-shortener-api-stg` (the setting today's Web image reads; Compose uses `api`). If Container Apps redirects in-environment HTTP to HTTPS, set `allowInsecure: true` on the API ingress only; Front Door stays HTTPS-only.
 
 ### Kafka / Event Hubs (Track A)
 
 | Setting | Local Compose | Azure staging |
 |---|---|---|
 | `Kafka__BootstrapServers` | `kafka:9092` | `<namespace>.servicebus.windows.net:9093` |
-| `Kafka__Topic` | `managed-clicks-v1` | `managed-clicks-v1` |
+| `Kafka__Topic` | `managed-clicks-v2` | `managed-clicks-v2` |
 | `Kafka__ConsumerGroup` | `shortener-analytics-v1` | `shortener-analytics-v1` |
 | `Kafka__SecurityProtocol` | `Plaintext` (default) | `SaslSsl` |
 | `Kafka__SaslMechanism` | unset | `Plain` |
@@ -96,7 +107,7 @@ At most one of `KnownProxyHost` or `KnownNetworks` may be set; both set fails at
 | `Kafka__SaslPassword` | unset | Event Hubs namespace connection string (Key Vault secret `eventhubs-connection`) |
 | `Kafka__EnableIdempotence` | `true` (default) | the value Track A confirms Event Hubs supports; consumer event-ID dedup already prevents double counting either way |
 
-Event hub `managed-clicks-v1`: 32 partitions (fixed at creation on Standard), 7-day retention. Consumer group `shortener-analytics-v1`.
+Event hub `managed-clicks-v2`: 32 partitions (fixed at creation on Standard), 7-day retention. Consumer group `shortener-analytics-v1`.
 
 ### Live updates (Track B)
 

@@ -35,7 +35,7 @@ Important context:
 In scope only:
 
 C1 — Foundation
-1. `infra/main.bicep` with modules under `infra/modules/`, parameters in `infra/main.staging.bicepparam`, and `azure.yaml` for `azd` with services `api`, `web`, `analytics` built from the root `Dockerfile` with their `target` and `PROJECT` build arg.
+1. `infra/main.bicep` with modules under `infra/modules/`, parameters in `infra/main.staging.bicepparam`, `azure.yaml` for `azd` with services `api`, `web`, `analytics` in prebuilt-image form, and `infra/scripts/build-images.sh`, all exactly as the contract's "Image build" section describes.
 2. Virtual network and subnets exactly per the contract.
 3. Log Analytics workspace and workspace-based Application Insights.
 4. Azure Container Registry, Standard SKU, admin user disabled.
@@ -46,14 +46,14 @@ C1 — Foundation
 C2 — Data services, all with public network access disabled and private endpoints in `10.60.4.0/24`, plus private DNS zones linked to the VNet:
 8. PostgreSQL Flexible Server: version 17, General Purpose `Standard_D2ds_v5`, 64 GiB storage, 7-day backups, zone redundancy off for staging, built-in PgBouncer enabled in transaction pool mode, database `shortener`. Administrator login `shortener`, password from `azd` secret environment value `POSTGRES_PASSWORD`, never committed. Write Key Vault secrets `pg-app-connection` (port 6432) and `pg-migrate-connection` (port 5432) exactly per the contract.
 9. Azure Managed Redis: smallest Balanced SKU available in the region (`Balanced_B0`, else `Balanced_B1`), OSS cluster policy, TLS on port 10000, access-key authentication. Write Key Vault secret `redis-connection` per the contract.
-10. Event Hubs: Standard namespace, 1 throughput unit with auto-inflate to 4, event hub `managed-clicks-v1` with 32 partitions and 7-day retention, consumer group `shortener-analytics-v1`, a namespace authorization rule with Send and Listen only. Write Key Vault secret `eventhubs-connection`. Confirm in Microsoft documentation that Standard supports private endpoints; if not, keep public access limited to the Container Apps environment's static outbound IP and record why.
+10. Event Hubs: Standard namespace, 1 throughput unit with auto-inflate to 4, event hub `managed-clicks-v2` with 32 partitions and 7-day retention, consumer group `shortener-analytics-v1`, a namespace authorization rule with Send and Listen only. Write Key Vault secret `eventhubs-connection`. Confirm in Microsoft documentation that Standard supports private endpoints; if not, keep public access limited to the Container Apps environment's static outbound IP and record why.
 11. Storage account for Data Protection keys: StorageV2, Standard_LRS, shared-key access disabled, blob container `dataprotection`. Key Vault keys `dataprotection-api` and `dataprotection-web` (RSA 2048). Grant `id-shortener-api-stg` and `id-shortener-web-stg` `Storage Blob Data Contributor` on the container and `Key Vault Crypto User` on their own key only.
 
 C3 — Container Apps
 12. Container Apps environment with workload profiles (Consumption profile), VNet-integrated into `10.60.0.0/23`, external ingress, logging to the Log Analytics workspace.
 13. `ca-shortener-api-stg`: external HTTP ingress on 8080; liveness `/health/live`, readiness `/health/ready`; HTTP scale rule at 50 concurrent requests. Environment and Key Vault secret references exactly per the contract for the API.
-14. `ca-shortener-web-stg`: external HTTP ingress on 8080, single revision mode, session affinity `sticky`; liveness `/health/live`, readiness `/health/ready`; HTTP scale rule at 50 concurrent requests. `ShortenerApi__BaseUrl` = `http://ca-shortener-api-stg/` with `ShortenerApi__AllowHttpInternal` = `true`.
-15. `ca-shortener-analytics-stg`: no ingress; KEDA `kafka` scale rule on consumer group `shortener-analytics-v1`, topic `managed-clicks-v1`, lag threshold 100, SASL plain over TLS using secrets from Key Vault; minimum 1, maximum 32 replicas.
+14. `ca-shortener-web-stg`: external HTTP ingress on 8080, single revision mode, session affinity `sticky`; liveness `/health/live`, readiness `/health/ready`; HTTP scale rule at 50 concurrent requests. `ShortenerApi__BaseUrl` = `http://ca-shortener-api-stg/` with `ShortenerApi__AllowedInternalHttpHosts` = `ca-shortener-api-stg`, per the contract. Verify the in-environment HTTP call succeeds; if Container Apps redirects it to HTTPS, set `allowInsecure: true` on the API ingress only.
+15. `ca-shortener-analytics-stg`: no ingress; KEDA `kafka` scale rule on consumer group `shortener-analytics-v1`, topic `managed-clicks-v2`, lag threshold 100, SASL plain over TLS using secrets from Key Vault; minimum 1, maximum 32 replicas.
 16. `caj-shortener-migrate-stg`: Container Apps Job, manual trigger, API image with args `--migrate`, using `pg-migrate-connection`, API identity, 1 parallelism, 0 retries, 10-minute timeout.
 17. Replica counts are parameters, and the first deployment uses:
     - API: min 1, max 1. Web: min 1, max 1. Analytics: min 0, max 0 (deployed but not running).
@@ -80,7 +80,7 @@ Required discovery before edits:
   - Event Hubs Standard private endpoint support.
   - Front Door Standard WebSocket support. Blazor Server needs WebSockets end to end; if Front Door Standard does not support them, stop before C4 and report options.
   - KEDA Kafka scaler settings for Event Hubs SASL in Container Apps.
-  - `azd` support for Dockerfile `target` and build args in `azure.yaml`.
+  - `az acr build` support for `--target` and `--build-arg`, and `azd` prebuilt `image:` with environment substitution and `predeploy` hooks (the `azure.yaml` schema has no Docker target setting; see the contract).
 - Inspect installed versions of `az`, the Bicep CLI, and `azd`.
 
 Implementation requirements:
@@ -102,7 +102,7 @@ Realtime / no-polling requirements:
 Testing, in order, each phase gated on the previous one:
 - Offline: `az bicep build --file infra/main.bicep` and `az bicep lint` pass; `azd provision --preview` or `what-if` output recorded.
 - C1–C2: deploy; confirm in the portal or CLI that every data service has public access disabled and resolves to a private IP from the VNet; confirm Key Vault secrets exist (names only, never values).
-- C3: build and push today's images with `azd deploy`; run the migration job once and record its exit status; confirm API and Web replicas are healthy; Analytics is at 0 replicas.
+- C3: build and push today's images with `infra/scripts/build-images.sh` (via `azd deploy`'s `predeploy` hook); run the migration job once and record its exit status; confirm API and Web replicas are healthy; Analytics is at 0 replicas.
 - C4: through the public host:
   - `GET /` returns 200 from Web.
   - `GET /health/ready` returns 200 from API.
