@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
 using Shortener.Web.Components;
 using Shortener.Web.Services;
@@ -25,8 +26,20 @@ if (entraConfigured)
     builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd")
         .EnableTokenAcquisitionToCallDownstreamApi()
         .AddInMemoryTokenCaches();
-    builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme,
-        options => options.Scope.Add(builder.Configuration["ShortenerApi:Scope"]!));
+    builder.Services.Configure<AuthenticationOptions>(options =>
+        options.DefaultAuthenticateScheme = CookieAuthenticationDefaults.AuthenticationScheme);
+    if (customerIdentity)
+    {
+        builder.Services.PostConfigure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
+        {
+            var previous = options.Events.OnRedirectToIdentityProviderForSignOut;
+            options.Events.OnRedirectToIdentityProviderForSignOut = async context =>
+            {
+                if (previous is not null) await previous(context);
+                SignOutHints.Apply(context.HttpContext, context.ProtocolMessage);
+            };
+        });
+    }
     builder.Services.AddScoped<IManagedApiTokenProvider, EntraApiTokenProvider>();
 }
 else
@@ -46,6 +59,13 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 var app = builder.Build();
+if (entraConfigured)
+{
+    // Microsoft.Identity.Web merges its event handlers into the resolved OIDC options.
+    var oidc = app.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+        .Get(OpenIdConnectDefaults.AuthenticationScheme);
+    oidc.Scope.Add(builder.Configuration["ShortenerApi:Scope"]!);
+}
 if (!ShortenerApiAddress.TryResolve(app.Configuration, out _, out var apiAddressReason))
     app.Logger.LogWarning("Shortener API base address rejected. Reason={Reason}. Web readiness will fail.", apiAddressReason);
 
@@ -59,6 +79,20 @@ if (!app.Environment.IsDevelopment())
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
 app.UseAuthentication();
+app.Use(async (context, next) =>
+{
+    if (context.User.Identity?.IsAuthenticated == true)
+    {
+        context.Response.OnStarting(() =>
+        {
+            context.Response.Headers["Cache-Control"] = "private, no-store";
+            context.Response.Headers["Pragma"] = "no-cache";
+            context.Response.Headers["Expires"] = "0";
+            return Task.CompletedTask;
+        });
+    }
+    await next();
+});
 app.UseAuthorization();
 app.UseAntiforgery();
 
@@ -95,8 +129,9 @@ app.MapPost("/account/signout", async (HttpContext context, IAntiforgery antifor
 {
     try { await antiforgery.ValidateRequestAsync(context); }
     catch (AntiforgeryValidationException) { return Results.BadRequest(); }
+    SignOutHints.Capture(context);
     return identity.Configured
-        ? Results.SignOut(new AuthenticationProperties { RedirectUri = "/" }, ["Cookies", "OpenIdConnect"])
+        ? Results.SignOut(new AuthenticationProperties { RedirectUri = "/signed-out" }, ["Cookies", "OpenIdConnect"])
         : Results.Redirect("/");
 });
 

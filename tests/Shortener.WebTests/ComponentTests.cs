@@ -1,8 +1,10 @@
 using System.Security.Claims;
 using Bunit;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Shortener.Web.Components.Layout;
 using Shortener.Web.Components.Pages;
 using Shortener.Web.Services;
@@ -15,6 +17,57 @@ public sealed class ComponentTests : BunitContext
     private static readonly CreatedLink Created = new("abc", "https://example.com", "/r/abc",
         new DateTimeOffset(2026, 10, 12, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero));
     private static readonly ManagedLink Managed = new("abc", "https://example.com", Created.CreatedAtUtc, null, 4);
+
+    [Fact]
+    public void Anonymous_navigation_shows_sign_in_without_sign_out()
+    {
+        AddAuthorization();
+        Setup();
+
+        var navigation = Render<NavMenu>();
+
+        Assert.Single(navigation.FindAll("a[href='/account/signin']"));
+        Assert.Empty(navigation.FindAll("form[action='/account/signout']"));
+    }
+
+    [Fact]
+    public void Authenticated_navigation_shows_sign_out_without_sign_in()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        Setup();
+
+        var navigation = Render<NavMenu>();
+
+        Assert.Single(navigation.FindAll("form[action='/account/signout']"));
+        Assert.Empty(navigation.FindAll("a[href='/account/signin']"));
+    }
+
+    [Fact]
+    public void Signed_out_page_is_anonymous_and_offers_next_steps()
+    {
+        AddAuthorization();
+        Setup();
+
+        var page = Render<SignedOut>();
+
+        Assert.True(Attribute.IsDefined(typeof(SignedOut), typeof(AllowAnonymousAttribute)));
+        Assert.Contains("You're signed out.", page.Find("h1").TextContent);
+        Assert.Single(page.FindAll("a[href='/account/signin']"));
+        Assert.Single(page.FindAll("a[href='/']"));
+    }
+
+    [Fact]
+    public void Logout_hint_is_sent_only_when_claim_is_present()
+    {
+        var withHint = new OpenIdConnectMessage();
+        SignOutHints.Apply(new ClaimsPrincipal(new ClaimsIdentity([new Claim("login_hint", "opaque-test-hint")], "test")), withHint);
+        Assert.Equal("opaque-test-hint", withHint.GetParameter("logout_hint"));
+
+        var withoutHint = new OpenIdConnectMessage();
+        SignOutHints.Apply(new ClaimsPrincipal(new ClaimsIdentity("test")), withoutHint);
+        Assert.Null(withoutHint.GetParameter("logout_hint"));
+    }
 
     [Fact]
     public void Brand_navigation_and_home_keep_accessible_guest_form()

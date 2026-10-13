@@ -1,0 +1,31 @@
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IdentityAvailability Identity
+@inject WorkspaceNavigationState WorkspaceNavigation
+
+@if (Identity.Customer && WorkspaceNavigation.Workspaces.Count > 1)
+{
+    <div class="workspace-switcher">
+        <label class="visually-hidden" for="workspace-select">Workspace</label>
+        <select id="workspace-select" class="form-select" aria-label="Workspace" value="@WorkspaceNavigation.SelectedId" @onchange="SelectWorkspaceAsync">
+            @foreach (var workspace in WorkspaceNavigation.Workspaces)
+            {
+                <option value="@workspace.Id">@workspace.Name</option>
+            }
+        </select>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized() => WorkspaceNavigation.Changed += Refresh;
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task SelectWorkspaceAsync(ChangeEventArgs args)
+    {
+        if (Guid.TryParse(args.Value?.ToString(), out var id))
+            await WorkspaceNavigation.SelectAsync(id);
+    }
+
+    public void Dispose() => WorkspaceNavigation.Changed -= Refresh;
+}
