@@ -26,6 +26,6 @@ Record the interactive local test of the Slice 3 Web app against the Slice 2 API
 ## Remaining verification
 
 - Guest expiry at the seven-day boundary has not been exercised in this live run; existing automated tests cover the exact boundary.
-- The full integration suite needs a separate disposable database named `Schwab_test_local`; those tests truncate `url_mappings` and must not target `schwab_slice2_local`. The exact local test name was requested before its migration or test run.
-- Restart persistence, a live wrong-scope rejection, a second-tenant isolation test, and a tenant onboarding policy have not been verified. Current managed links are tenant-shared; per-user ownership using `oid` is not implemented.
+- The full integration suite later ran against the separate migrated disposable database `Schwab_test_local` and passed (19 unit and 9 integration tests). See `2026-10-12-2319-local-postgresql-name-cleanup-plan.md` for the data-preserving local name migration and remaining old-volume cleanup.
+- Automated restart persistence passed in the integration suite. A live wrong-scope rejection, a second-tenant isolation test, and a tenant onboarding policy have not been verified. Current managed links are tenant-shared; per-user ownership using `oid` is not implemented.
 - No branch push, deployment, production credential setup, or operational acceptance is claimed.
