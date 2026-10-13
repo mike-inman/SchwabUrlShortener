@@ -9,10 +9,16 @@ if ! command -v az >/dev/null 2>&1 || ! command -v azd >/dev/null 2>&1; then
   exit 2
 fi
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
+if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   printf '%s\n' 'Commit source changes before building immutable release images.' >&2
   exit 2
 fi
+
+# Only committed application source enters the remote ACR build context. In
+# particular, the local azd environment under .azure/ must never be uploaded.
+build_context=$(mktemp -d)
+trap 'rm -rf "$build_context"' EXIT HUP INT TERM
+git archive HEAD Dockerfile src | tar -x -C "$build_context"
 
 registry=${AZURE_CONTAINER_REGISTRY_NAME:-}
 if [ -z "$registry" ]; then
@@ -37,7 +43,7 @@ build_one() {
       --image "$repository:$tag" \
       --target "$stage" \
       --build-arg "PROJECT=$project" \
-      --file Dockerfile . >/dev/null
+      --file Dockerfile "$build_context" >/dev/null
     digest=$(az acr repository show \
       --name "$registry" \
       --image "$repository:$tag" \
