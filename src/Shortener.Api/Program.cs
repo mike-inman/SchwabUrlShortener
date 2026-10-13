@@ -1,7 +1,11 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Identity.Web;
+using Npgsql;
 using Shortener.Application;
 using Shortener.Application.Interfaces;
 using Shortener.Domain;
@@ -11,8 +15,18 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IUrlShortenerRepository, InMemoryUrlShortenerRepository>();
+builder.Services.AddSingleton(sp =>
+{
+    var connectionString = sp.GetRequiredService<IConfiguration>().GetConnectionString("ShortenerDb");
+    if (string.IsNullOrWhiteSpace(connectionString))
+        throw new InvalidOperationException("ConnectionStrings:ShortenerDb must be configured for PostgreSQL persistence.");
+    return new NpgsqlDataSourceBuilder(connectionString).Build();
+});
+builder.Services.AddDbContextFactory<ShortenerDbContext>((sp, options) =>
+    options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
+builder.Services.AddSingleton<IUrlShortenerRepository, PostgresUrlShortenerRepository>();
 builder.Services.AddSingleton<IUrlShortenerService, UrlShortenerService>();
+builder.Services.AddHealthChecks().AddCheck<PostgresHealthCheck>("postgres", tags: ["ready"]);
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration, "AzureAd");
 builder.Services.AddAuthorization();
@@ -21,6 +35,9 @@ var app = builder.Build();
 // A real app registration is required. No demo tenant or identity is installed at runtime.
 if (string.IsNullOrWhiteSpace(app.Configuration["AzureAd:ClientId"]))
     throw new InvalidOperationException("AzureAd:ClientId must be configured with the Entra API app registration before starting the API.");
+if (string.IsNullOrWhiteSpace(app.Configuration.GetConnectionString("ShortenerDb")))
+    throw new InvalidOperationException("ConnectionStrings:ShortenerDb must be configured for PostgreSQL persistence.");
+_ = app.Services.GetRequiredService<NpgsqlDataSource>();
 if (app.Environment.IsDevelopment()) app.MapOpenApi();
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
@@ -39,6 +56,9 @@ app.Use(async (context, next) =>
     await next(context);
 });
 app.UseAuthorization();
+
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false }).AllowAnonymous();
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") }).AllowAnonymous();
 
 app.MapPost("/api/urls/guest", async (CreateUrlRequest request, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
@@ -111,3 +131,21 @@ public record CreateUrlResponse(string ShortCode, string OriginalUrl, string Sho
 public record ManagedUrlResponse(string ShortCode, string OriginalUrl, DateTimeOffset CreatedAtUtc, DateTimeOffset? LastAccessedAtUtc, int HitCount);
 public record ApiError(string Error);
 public partial class Program { }
+
+public sealed class PostgresHealthCheck(IDbContextFactory<ShortenerDbContext> contextFactory, ILogger<PostgresHealthCheck> logger) : IHealthCheck
+{
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await using var db = await contextFactory.CreateDbContextAsync(cancellationToken);
+            var pending = await db.Database.GetPendingMigrationsAsync(cancellationToken);
+            return pending.Any() ? HealthCheckResult.Unhealthy("PostgreSQL migrations pending.") : HealthCheckResult.Healthy();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning("PostgreSQL readiness failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+            return HealthCheckResult.Unhealthy("PostgreSQL unavailable.");
+        }
+    }
+}
