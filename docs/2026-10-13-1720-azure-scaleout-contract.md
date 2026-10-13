@@ -1,6 +1,6 @@
 # Azure scale-out contract — 2026-10-13 17:20 CDT
 
-Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Change it only by editing this file and telling every active track.
+Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts` for Front Door. Change it only by editing this file and telling every active track.
 
 ## Purpose
 
@@ -93,9 +93,15 @@ At most one of `KnownProxyHost` or `KnownNetworks` may be set; both set fails at
 
 ### Allowed hosts
 
-- API, Azure: `AllowedHosts` = the public host (Front Door endpoint host or custom domain) and `ca-shortener-api-stg`.
-- Web, Azure: `AllowedHosts` = the public host.
+Front Door sends each request to Container Apps with `Host` set to that app's origin FQDN (`<app>.<environment default domain>`), because Container Apps ingress routes by host name and would return 404 for the Front Door or custom host. The public host reaches the app in `X-Forwarded-Host`. ASP.NET Core host filtering runs before forwarded headers are applied, so each app must allow its own origin FQDN.
+
+- API, Azure: `AllowedHosts` = `ca-shortener-api-stg.<environment default domain>;ca-shortener-api-stg;<public host>`.
+- Web, Azure: `AllowedHosts` = `ca-shortener-web-stg.<environment default domain>;<public host>`.
+- Bicep builds the origin FQDNs from the Container Apps environment's `defaultDomain` output, which exists before the apps are created, so there is no dependency cycle. `<public host>` is the Front Door endpoint host, or `CUSTOM_DOMAIN` when set.
+- Front Door origins keep the origin host header equal to the origin FQDN.
 - `ShortenerApi__BaseUrl` = `http://ca-shortener-api-stg/` and `ShortenerApi__AllowedInternalHttpHosts` = `ca-shortener-api-stg` (the setting today's Web image reads; Compose uses `api`). If Container Apps redirects in-environment HTTP to HTTPS, set `allowInsecure: true` on the API ingress only; Front Door stays HTTPS-only.
+- `PublicLinks__BaseUrl` = `https://<public host>/` on API and Web, so generated short links always use the public host, whatever `Host` the request arrived with.
+- Until Track A's `ForwardedHeaders__KnownNetworks` is enabled, apps see the origin FQDN as the request host. Guest flows work; Entra sign-in does not, because the redirect URI would be built from the origin FQDN. This is expected for the first deployment.
 
 ### Kafka / Event Hubs (Track A)
 

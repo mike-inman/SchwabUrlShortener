@@ -41,7 +41,7 @@ C1 — Foundation
 4. Azure Container Registry, Standard SKU, admin user disabled.
 5. Key Vault, RBAC authorization, soft delete and purge protection enabled, public network access disabled, private endpoint.
 6. User-assigned managed identities: `id-shortener-api-stg`, `id-shortener-web-stg`, `id-shortener-analytics-stg`. Each gets `AcrPull` on the registry and `Key Vault Secrets User` on the vault.
-7. A resource group budget of USD 300 per month with alerts at 80% and 100% to the email in `azd` environment value `BUDGET_CONTACT_EMAIL`. If that value is unset, omit the budget and record it as an operator action.
+7. A resource group budget of USD 600 per month (the top of Track C's 17:57 planning range of USD 300–600) with alerts at 50%, 80%, and 100% to the email in `azd` environment value `BUDGET_CONTACT_EMAIL`. If that value is unset, omit the budget and record it as an operator action.
 
 C2 — Data services, all with public network access disabled and private endpoints in `10.60.4.0/24`, plus private DNS zones linked to the VNet:
 8. PostgreSQL Flexible Server: version 17, General Purpose `Standard_D2ds_v5`, 64 GiB storage, 7-day backups, zone redundancy off for staging, built-in PgBouncer enabled in transaction pool mode, database `shortener`. Administrator login `shortener`, password from `azd` secret environment value `POSTGRES_PASSWORD`, never committed. Write Key Vault secrets `pg-app-connection` (port 6432) and `pg-migrate-connection` (port 5432) exactly per the contract.
