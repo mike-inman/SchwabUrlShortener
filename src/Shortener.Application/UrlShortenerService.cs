@@ -1,3 +1,7 @@
+using System.Security.Cryptography;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
+using Microsoft.Extensions.Logging;
 using Shortener.Application.Interfaces;
 using Shortener.Domain;
 
@@ -5,80 +9,150 @@ namespace Shortener.Application;
 
 public sealed class UrlShortenerService : IUrlShortenerService
 {
+    private static readonly Meter ClickMeter = new("Shortener.ClickCapture", "1.0");
+    private static readonly Counter<long> CapturedClicks = ClickMeter.CreateCounter<long>("shortener.clicks.captured");
     private const string AllowedChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     private readonly IUrlShortenerRepository _repository;
+    private readonly IRedirectCache _cache;
+    private readonly TimeProvider _clock;
+    private readonly ILogger<UrlShortenerService> _logger;
+    private static readonly TimeSpan MaximumCacheTtl = TimeSpan.FromHours(1);
 
-    public UrlShortenerService(IUrlShortenerRepository repository)
+    public UrlShortenerService(IUrlShortenerRepository repository, IRedirectCache cache,
+        TimeProvider clock, ILogger<UrlShortenerService> logger)
     {
         _repository = repository;
+        _cache = cache;
+        _clock = clock;
+        _logger = logger;
     }
 
-    public async Task<UrlMapping> CreateAsync(string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+    public async Task<UrlMapping> CreateGuestAsync(string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+        => (await CreateAsync(null, originalUrl, requestedShortCode, cancellationToken)).Mapping;
+
+    public async Task<UrlMapping> CreateManagedAsync(Guid tenantId, string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+        => (await CreateManagedWithOutcomeAsync(tenantId, originalUrl, requestedShortCode, cancellationToken)).Mapping;
+
+    public Task<ManagedCreateResult> CreateManagedWithOutcomeAsync(Guid tenantId, string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+    {
+        if (tenantId == Guid.Empty) throw new ArgumentException("A valid tenant is required.", nameof(tenantId));
+        return CreateAsync(tenantId, originalUrl, requestedShortCode, cancellationToken);
+    }
+
+    private async Task<ManagedCreateResult> CreateAsync(Guid? tenantId, string originalUrl, string? requestedShortCode, CancellationToken cancellationToken)
     {
         var normalizedUrl = UrlValidation.NormalizeUrl(originalUrl);
-
         if (!UrlValidation.IsValidAbsoluteUrl(normalizedUrl))
-        {
             throw new ArgumentException("Original URL must be an absolute http or https URL.", nameof(originalUrl));
-        }
 
-        var existing = await _repository.GetByOriginalUrlAsync(normalizedUrl, cancellationToken);
-        if (existing is not null)
+        var custom = !string.IsNullOrWhiteSpace(requestedShortCode);
+        // A destination may have many generated links. Only an explicit code can identify a repeat request.
+        if (tenantId is { } owner && custom)
         {
-            return existing;
+            var existing = await _repository.GetManagedByShortCodeAsync(owner, requestedShortCode!.Trim(), cancellationToken);
+            if (existing is not null && existing.OriginalUrl == normalizedUrl)
+                return new(existing, AlreadyExists: true);
         }
-
-        var finalShortCode = string.IsNullOrWhiteSpace(requestedShortCode)
-            ? GenerateShortCode()
-            : requestedShortCode.Trim();
-
-        if (!UrlValidation.IsValidShortCode(finalShortCode))
+        for (var attempt = 0; attempt < 10; attempt++)
         {
-            throw new ArgumentException("The short code must be 4 to 12 characters using letters or numbers only.", nameof(requestedShortCode));
+            var code = custom ? requestedShortCode!.Trim() : GenerateShortCode();
+            var now = _clock.GetUtcNow();
+            var mapping = tenantId is { } id
+                ? UrlMapping.CreateManaged(normalizedUrl, code, id, now)
+                : UrlMapping.CreateGuest(normalizedUrl, code, now);
+            if (await _repository.TryAddAsync(mapping, cancellationToken))
+            {
+                await TryPopulateCacheAsync(RedirectTarget.FromMapping(mapping), cancellationToken);
+                return new(mapping, AlreadyExists: false);
+            }
+            if (custom)
+            {
+                if (tenantId is { } ownerOnConflict)
+                {
+                    var existing = await _repository.GetManagedByShortCodeAsync(ownerOnConflict, code, cancellationToken);
+                    if (existing is not null && existing.OriginalUrl == normalizedUrl)
+                        return new(existing, AlreadyExists: true);
+                }
+                throw new ShortCodeConflictException();
+            }
         }
-
-        var existingByCode = await _repository.GetByShortCodeAsync(finalShortCode, cancellationToken);
-        if (existingByCode is not null)
-        {
-            throw new InvalidOperationException($"The short code '{finalShortCode}' is already in use.");
-        }
-
-        var mapping = UrlMapping.Create(normalizedUrl, finalShortCode);
-        await _repository.SaveAsync(mapping, cancellationToken);
-        return mapping;
+        throw new InvalidOperationException("Could not allocate a unique short code. Try again.");
     }
 
-    public async Task<UrlMapping?> ResolveAsync(string shortCode, CancellationToken cancellationToken = default)
+    public async Task<RedirectTarget?> ResolveAsync(string shortCode, CancellationToken cancellationToken = default)
     {
-        var mapping = await _repository.GetByShortCodeAsync(shortCode, cancellationToken);
-        if (mapping is null)
+        if (!UrlValidation.IsValidShortCode(shortCode)) return null;
+        var code = shortCode.Trim();
+        RedirectTarget? target = null;
+        try
         {
-            return null;
+            target = await _cache.GetAsync(code, cancellationToken);
+            if (target is not null && !target.IsValidFor(code))
+            {
+                _logger.LogWarning("Redirect cache value invalid; using PostgreSQL. CorrelationId={CorrelationId}", Activity.Current?.Id);
+                target = null;
+            }
+            else
+                _logger.LogInformation("Redirect cache {Outcome}. CorrelationId={CorrelationId}",
+                    target is null ? "miss" : "hit", Activity.Current?.Id);
         }
-
-        mapping.RecordHit();
-        await _repository.SaveAsync(mapping, cancellationToken);
-        return mapping;
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Redirect cache read failed; using PostgreSQL. ExceptionType={ExceptionType} CorrelationId={CorrelationId}",
+                ex.GetType().Name, Activity.Current?.Id);
+        }
+        if (target is null)
+        {
+            _logger.LogInformation("Redirect PostgreSQL fallback. CorrelationId={CorrelationId}", Activity.Current?.Id);
+            var mapping = await _repository.GetByShortCodeAsync(code, cancellationToken);
+            if (mapping is null) return null;
+            target = RedirectTarget.FromMapping(mapping);
+            if (target.IsExpired(_clock.GetUtcNow())) return null;
+            await TryPopulateCacheAsync(target, cancellationToken);
+        }
+        if (target.IsExpired(_clock.GetUtcNow())) return null;
+        if (target.Mode == LinkMode.Managed)
+        {
+            var eventId = await _repository.CaptureManagedClickAsync(
+                target.Id, target.TenantId!.Value, _clock.GetUtcNow(), Activity.Current?.Id, cancellationToken);
+            CapturedClicks.Add(1);
+            _logger.LogInformation("Managed click captured. EventId={EventId} TenantId={TenantId} MappingId={MappingId} CorrelationId={CorrelationId}",
+                eventId, target.TenantId, target.Id, Activity.Current?.Id);
+        }
+        return target;
     }
 
-    public Task<UrlMapping?> GetByShortCodeAsync(string shortCode, CancellationToken cancellationToken = default)
+    private async Task TryPopulateCacheAsync(RedirectTarget target, CancellationToken cancellationToken)
     {
-        return _repository.GetByShortCodeAsync(shortCode, cancellationToken);
+        var ttl = target.ExpiresAtUtc is { } expiry
+            ? expiry - _clock.GetUtcNow() : MaximumCacheTtl;
+        if (ttl > MaximumCacheTtl) ttl = MaximumCacheTtl;
+        if (ttl <= TimeSpan.Zero) return;
+        try { await _cache.SetAsync(target, ttl, cancellationToken); }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Redirect cache write failed; PostgreSQL remains authoritative. ExceptionType={ExceptionType} CorrelationId={CorrelationId}",
+                ex.GetType().Name, Activity.Current?.Id);
+        }
     }
 
-    public Task<IReadOnlyCollection<UrlMapping>> GetAnalyticsAsync(CancellationToken cancellationToken = default)
+    public Task<UrlMapping?> GetManagedAsync(Guid tenantId, string shortCode, CancellationToken cancellationToken = default)
     {
-        return _repository.GetAllAsync(cancellationToken);
+        if (tenantId == Guid.Empty) throw new ArgumentException("A valid tenant is required.", nameof(tenantId));
+        if (!UrlValidation.IsValidShortCode(shortCode)) return Task.FromResult<UrlMapping?>(null);
+        return _repository.GetManagedByShortCodeAsync(tenantId, shortCode.Trim(), cancellationToken);
+    }
+
+    public Task<IReadOnlyCollection<UrlMapping>> GetManagedAnalyticsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        if (tenantId == Guid.Empty) throw new ArgumentException("A valid tenant is required.", nameof(tenantId));
+        return _repository.GetManagedByTenantAsync(tenantId, cancellationToken);
     }
 
     private static string GenerateShortCode()
     {
-        var chars = new char[6];
-        for (var i = 0; i < chars.Length; i++)
-        {
-            chars[i] = AllowedChars[Random.Shared.Next(AllowedChars.Length)];
-        }
-
+        Span<char> chars = stackalloc char[8];
+        for (var i = 0; i < chars.Length; i++) chars[i] = AllowedChars[RandomNumberGenerator.GetInt32(AllowedChars.Length)];
         return new string(chars);
     }
 }

@@ -1,0 +1,184 @@
+name: schwab-shortener
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: shortener
+      POSTGRES_USER: shortener
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the chosen env file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shortener -d shortener"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:4.1.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "kafka:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  kafka-init:
+    image: apache/kafka:4.1.0
+    entrypoint: ["/opt/kafka/bin/kafka-topics.sh"]
+    command: ["--bootstrap-server", "kafka:9092", "--create", "--if-not-exists", "--topic", "${KAFKA_TOPIC:-managed-clicks-v1}", "--partitions", "3", "--replication-factor", "1"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+      args:
+        PROJECT: src/Shortener.Api/Shortener.Api.csproj
+    command: ["--migrate"]
+    environment: &api_environment
+      AzureAd__ClientId: ${API_CLIENT_ID:?Set API_CLIENT_ID in the chosen env file}
+      AzureAd__TenantId: ${TENANT_ID:-organizations}
+      ConnectionStrings__ShortenerDb: Host=db;Port=5432;Database=shortener;Username=shortener;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Redis: redis:6379
+      PublicLinks__BaseUrl: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL in the chosen env file}
+      AllowedHosts: ${PUBLIC_DOMAIN:-localhost};api
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+      args:
+        PROJECT: src/Shortener.Api/Shortener.Api.csproj
+    environment:
+      <<: *api_environment
+      ForwardedHeaders__KnownProxyHost: proxy
+    volumes:
+      - api_keys:/root/.aspnet/DataProtection-Keys
+    healthcheck:
+      test: ["CMD", "dotnet", "Shortener.Api.dll", "--healthcheck"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      proxy:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+      args:
+        PROJECT: src/Shortener.Web/Shortener.Web.csproj
+    environment:
+      ShortenerApi__BaseUrl: http://api:8080/
+      ShortenerApi__AllowHttpInternal: "true"
+      ShortenerApi__Scope: ${API_SCOPE:-}
+      PublicLinks__BaseUrl: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL in the chosen env file}
+      AllowedHosts: ${PUBLIC_DOMAIN:-localhost}
+      ForwardedHeaders__KnownProxyHost: proxy
+      AzureAd__Instance: https://login.microsoftonline.com/
+      AzureAd__TenantId: ${TENANT_ID:-organizations}
+      AzureAd__ClientId: ${WEB_CLIENT_ID:-}
+      AzureAd__ClientSecret: ${WEB_CLIENT_SECRET:-}
+    volumes:
+      - web_keys:/root/.aspnet/DataProtection-Keys
+    healthcheck:
+      test: ["CMD", "dotnet", "Shortener.Web.dll", "--healthcheck"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      api:
+        condition: service_healthy
+      proxy:
+        condition: service_healthy
+    restart: unless-stopped
+
+  analytics:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: analytics
+      args:
+        PROJECT: src/Shortener.Analytics/Shortener.Analytics.csproj
+    environment:
+      ConnectionStrings__ShortenerDb: Host=db;Port=5432;Database=shortener;Username=shortener;Password=${POSTGRES_PASSWORD}
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__Topic: ${KAFKA_TOPIC:-managed-clicks-v1}
+      Kafka__ConsumerGroup: ${KAFKA_CONSUMER_GROUP:-shortener-analytics-v1}
+    healthcheck:
+      test: ["CMD", "dotnet", "Shortener.Analytics.dll", "--healthcheck"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  proxy:
+    image: caddy:2.10-alpine
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  kafka_data:
+  api_keys:
+  web_keys:

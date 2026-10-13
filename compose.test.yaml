@@ -1,0 +1,46 @@
+# 2026-10-13: add only to a new disposable Compose project, never an application volume.
+services:
+  db:
+    volumes:
+      - ./deploy/10-test-database.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
+
+  test-migrate:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+      args:
+        PROJECT: src/Shortener.Api/Shortener.Api.csproj
+    command: ["--migrate"]
+    environment:
+      AzureAd__ClientId: ${API_CLIENT_ID:?Set API_CLIENT_ID in the chosen env file}
+      ConnectionStrings__ShortenerDb: Host=db;Port=5432;Database=Schwab_test_local;Username=shortener;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Redis: redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  tests:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: tests
+    entrypoint: ["dotnet", "test"]
+    command: ["SchwabUrlShortener.slnx", "--nologo", "-m:1", "/nodeReuse:false"]
+    working_dir: /src
+    environment:
+      ConnectionStrings__ShortenerDb: Host=db;Port=5432;Database=Schwab_test_local;Username=shortener;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Redis: redis:6379
+      Kafka__BootstrapServers: kafka:9092
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+    depends_on:
+      test-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: "no"

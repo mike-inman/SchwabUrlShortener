@@ -1,13 +1,16 @@
 ## Slice 2 — PostgreSQL Persistence Handoff
 Status: drafted on 2026-10-12
-You are working in /Users/michaelinman/Repos/SchwabUrlShortener.
+You are working in /Users/michaelinman/Repos/SchwabUrlShortener-slice2.
+Branch: codex/slice-2-postgresql-persistence.
+Common Slice 1 baseline commit: 805f2430189a40d4aa019368f1d80c46509fd71c.
 
 Follow these repo standards exactly:
 - Read `AGENTS.md`; confirm `pwd -P`, branch, current commit, and `git status --short --branch` before edits.
 - Preserve all existing modified and untracked work. Do not reset, stash, discard, or stage unrelated files.
 - Do not modify `.env*`, local agent configuration, credentials, or the untracked assignment PDF.
 - Build and test the real PostgreSQL path; an in-memory repository is not a runtime fallback.
-- Start only after Slice 1’s tenant-aware application/repository contracts are integrated.
+- Start only from the committed Slice 1 baseline above; preserve its contracts.
+- Work only in this Slice 2 worktree. Do not edit the canonical checkout or the Slice 3 worktree.
 
 Task: Replace runtime in-memory URL mapping persistence with durable PostgreSQL storage.
 
@@ -27,19 +30,22 @@ In scope only:
 4. Enforce tenant-scoped managed-link access and globally unique short codes across guest and managed links in PostgreSQL constraints/indexes.
 5. Ensure expired guest links cannot resolve as redirects and guest access never changes analytics fields.
 6. Add real PostgreSQL integration coverage for both link modes, expiry, managed analytics reads, restart persistence, and uniqueness races.
+7. File ownership: `src/Shortener.Infrastructure/**` (including migration files), API repository registration and database readiness/configuration in `src/Shortener.Api/Program.cs`, `src/Shortener.Api/appsettings*.json`, and `src/Shortener.Api/Shortener.Api.csproj`; `tests/Shortener.IntegrationTests/**`; `README.md`; this handoff and a uniquely named dated Slice 2 note under `docs/`.
 
 Out of scope:
 - Redis cache, Kafka events/outbox, or background analytics processing.
 - Entra authentication changes or Blazor UI.
 - Hard-coded connection strings, automatic production schema mutation at app startup, or an in-memory runtime fallback.
 - Unrequested retention policies, multi-region replication, or capacity claims.
+- Slice 3 owns `src/Shortener.Web/**`, any new `tests/Shortener.WebTests/**`, and `SchwabUrlShortener.slnx` if a UI test project is added. Do not edit those paths.
+- Keep `tests/Shortener.UnitTests/**`, `src/Shortener.Domain/**`, `src/Shortener.Application/**`, shared architecture/roadmap documents, and `scripts/**` unchanged. If a shared contract must change, stop for integration review rather than editing it concurrently.
 
 Required discovery before edits:
 - Inspect the Slice 1 contracts and its validation outcome.
 - Inspect `src/Shortener.Infrastructure/`, its project references, API DI registration, configuration, and current repository.
 - Inspect both test projects and current package versions before selecting a migration/ORM strategy.
 - Inspect `.gitignore` and existing environment configuration without printing or modifying secret values.
-- Confirm the test environment can provide PostgreSQL; use the repository’s Compose stack if already available, otherwise document the exact external prerequisite instead of faking persistence.
+- A local Docker daemon and `postgres:16-alpine` image were verified on 2026-10-12 with a disposable PostgreSQL instance answering `SELECT 1`; the probe was removed. No repository Compose stack exists yet, and host port 5432 is occupied by an unrelated container. Use a separate disposable PostgreSQL container/port for real integration tests; do not touch the existing database or credentials.
 
 Implementation requirements:
 - PostgreSQL is the runtime system of record. Never select the in-memory repository through normal configuration or silently fall back on connection failure.
@@ -64,13 +70,13 @@ Realtime / no-polling requirements:
 Testing:
 - Use a real PostgreSQL instance for repository integration tests (a disposable test container is appropriate if supported by the environment).
 - Cover guest and managed link persistence, exact expiry behavior, tenant isolation, cross-mode duplicate-code races, cancellation, and managed analytics updates.
-- Keep in-memory fakes confined to unit tests; label them as test doubles.
+- This slice owns `tests/Shortener.IntegrationTests/**` for real PostgreSQL tests. Keep in-memory fakes confined to isolated tests; label them as test doubles. Slice 3 owns its separate UI test path.
 - Run targeted Infrastructure/API tests, then solution build and tests if the targeted checks are green.
 - State clearly whether PostgreSQL tests ran against a real server/container or were blocked; mocked repositories do not prove persistence.
 
 Documentation:
 - Add a dated implementation/validation note describing migration commands, required configuration names (not values), real database evidence, and blockers.
-- Update setup documentation surgically after verifying the existing text and retaining unrelated content.
+- Slice 2 exclusively owns shared `README.md` setup edits. Update it surgically after verifying its current text. Slice 3 records UI setup only in its own dated Slice 3 note until integration. Do not edit shared architecture or roadmap documents.
 
 Completion criteria:
 - [ ] API runtime registration uses PostgreSQL and has no normal-path in-memory fallback.

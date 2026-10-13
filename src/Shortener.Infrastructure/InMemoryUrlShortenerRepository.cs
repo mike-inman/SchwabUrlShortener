@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Shortener.Application.Interfaces;
 using Shortener.Domain;
 
@@ -6,40 +5,59 @@ namespace Shortener.Infrastructure;
 
 public sealed class InMemoryUrlShortenerRepository : IUrlShortenerRepository
 {
-    private readonly ConcurrentDictionary<string, UrlMapping> _byShortCode = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, string> _byOriginalUrl = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _gate = new();
+    private readonly Dictionary<string, UrlMapping> _byCode = new(StringComparer.OrdinalIgnoreCase);
+
+    public Task<bool> TryAddAsync(UrlMapping mapping, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            if (_byCode.ContainsKey(mapping.ShortCode)) return Task.FromResult(false);
+            _byCode.Add(mapping.ShortCode, mapping);
+            return Task.FromResult(true);
+        }
+    }
 
     public Task<UrlMapping?> GetByShortCodeAsync(string shortCode, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _byShortCode.TryGetValue(shortCode.Trim(), out var mapping);
-        return Task.FromResult(mapping);
+        lock (_gate) return Task.FromResult(_byCode.GetValueOrDefault(shortCode));
     }
 
-    public Task<UrlMapping?> GetByOriginalUrlAsync(string originalUrl, CancellationToken cancellationToken = default)
+    public Task<UrlMapping?> GetManagedByShortCodeAsync(Guid tenantId, string shortCode, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_byOriginalUrl.TryGetValue(originalUrl.Trim(), out var shortCode))
+        lock (_gate)
         {
-            _byShortCode.TryGetValue(shortCode, out var mapping);
-            return Task.FromResult(mapping);
+            var mapping = _byCode.GetValueOrDefault(shortCode);
+            return Task.FromResult(mapping is { Mode: LinkMode.Managed } && mapping.TenantId == tenantId ? mapping : null);
         }
-
-        return Task.FromResult<UrlMapping?>(null);
     }
 
-    public Task SaveAsync(UrlMapping mapping, CancellationToken cancellationToken = default)
+    public Task<UrlMapping?> GetManagedByOriginalUrlAsync(Guid tenantId, string originalUrl, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _byShortCode[mapping.ShortCode] = mapping;
-        _byOriginalUrl[mapping.OriginalUrl] = mapping.ShortCode;
-        return Task.CompletedTask;
+        lock (_gate) return Task.FromResult(_byCode.Values.FirstOrDefault(x => x.Mode == LinkMode.Managed && x.TenantId == tenantId && x.OriginalUrl == originalUrl));
     }
 
-    public Task<IReadOnlyCollection<UrlMapping>> GetAllAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyCollection<UrlMapping>> GetManagedByTenantAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var items = _byShortCode.Values.OrderByDescending(x => x.CreatedAtUtc).ToArray();
-        return Task.FromResult<IReadOnlyCollection<UrlMapping>>(items);
+        lock (_gate) return Task.FromResult<IReadOnlyCollection<UrlMapping>>(_byCode.Values.Where(x => x.Mode == LinkMode.Managed && x.TenantId == tenantId).OrderByDescending(x => x.CreatedAtUtc).ToArray());
+    }
+
+    public Task<Guid> CaptureManagedClickAsync(string mappingId, Guid tenantId, DateTimeOffset occurredAtUtc,
+        string? traceId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            var stored = _byCode.Values.SingleOrDefault(x => x.Id == mappingId && x.TenantId == tenantId && x.Mode == LinkMode.Managed);
+            if (stored is null)
+                throw new InvalidOperationException("Managed link was not found.");
+        }
+        // This repository is a test double only. It cannot model a durable outbox.
+        return Task.FromResult(Guid.NewGuid());
     }
 }

@@ -4,8 +4,12 @@ namespace Shortener.Application.Interfaces;
 
 public interface IUrlShortenerRepository
 {
+    // Code uniqueness is global across both modes. Add must be atomic with respect to this key.
+    Task<bool> TryAddAsync(UrlMapping mapping, CancellationToken cancellationToken = default);
     Task<UrlMapping?> GetByShortCodeAsync(string shortCode, CancellationToken cancellationToken = default);
-    Task<UrlMapping?> GetByOriginalUrlAsync(string originalUrl, CancellationToken cancellationToken = default);
-    Task SaveAsync(UrlMapping mapping, CancellationToken cancellationToken = default);
-    Task<IReadOnlyCollection<UrlMapping>> GetAllAsync(CancellationToken cancellationToken = default);
+    Task<UrlMapping?> GetManagedByShortCodeAsync(Guid tenantId, string shortCode, CancellationToken cancellationToken = default);
+    Task<UrlMapping?> GetManagedByOriginalUrlAsync(Guid tenantId, string originalUrl, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<UrlMapping>> GetManagedByTenantAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<Guid> CaptureManagedClickAsync(string mappingId, Guid tenantId, DateTimeOffset occurredAtUtc,
+        string? traceId, CancellationToken cancellationToken = default);
 }

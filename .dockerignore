@@ -8,6 +8,7 @@
 .env.*
 **/.env
 **/.env.*
+deploy/*.env
 .claude/
 .codex/
 docs/

@@ -1,110 +1,222 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Identity.Web;
+using Npgsql;
 using Shortener.Application;
 using Shortener.Application.Interfaces;
+using Shortener.Domain;
 using Shortener.Infrastructure;
+
+if (args.Contains("--healthcheck", StringComparer.Ordinal))
+{
+    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
+    try
+    {
+        using var response = await client.GetAsync("http://localhost:8080/health/ready");
+        Environment.ExitCode = response.IsSuccessStatusCode ? 0 : 1;
+    }
+    catch (HttpRequestException) { Environment.ExitCode = 1; }
+    catch (TaskCanceledException) { Environment.ExitCode = 1; }
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole();
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
+ConfigureTrustedProxy(builder);
+
 builder.Services.AddOpenApi();
-builder.Services.AddSingleton<IUrlShortenerRepository, InMemoryUrlShortenerRepository>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(sp =>
+{
+    var connectionString = sp.GetRequiredService<IConfiguration>().GetConnectionString("ShortenerDb");
+    if (string.IsNullOrWhiteSpace(connectionString))
+        throw new InvalidOperationException("ConnectionStrings:ShortenerDb must be configured for PostgreSQL persistence.");
+    return new NpgsqlDataSourceBuilder(connectionString).Build();
+});
+builder.Services.AddDbContextFactory<ShortenerDbContext>((sp, options) =>
+    options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
+builder.Services.AddSingleton<IUrlShortenerRepository, PostgresUrlShortenerRepository>();
+builder.Services.AddSingleton<IRedirectCache>(sp => new RedisRedirectCache(
+    sp.GetRequiredService<IConfiguration>().GetConnectionString("Redis"),
+    sp.GetRequiredService<IConfiguration>()["RedirectCache:Namespace"]));
 builder.Services.AddSingleton<IUrlShortenerService, UrlShortenerService>();
+builder.Services.AddHealthChecks()
+    .AddCheck<PostgresHealthCheck>("postgres", tags: ["ready"])
+    .AddCheck<RedisHealthCheck>("redis", tags: ["ready"]);
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApi(builder.Configuration, "AzureAd");
+builder.Services.AddAuthorization(options =>
+{
+    options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .RequireScope("access_as_user")
+        .Build();
+});
 
 var app = builder.Build();
-
-if (app.Environment.IsDevelopment())
+// A real app registration is required. No demo tenant or identity is installed at runtime.
+if (string.IsNullOrWhiteSpace(app.Configuration["AzureAd:ClientId"]))
+    throw new InvalidOperationException("AzureAd:ClientId must be configured with the Entra API app registration before starting the API.");
+if (string.IsNullOrWhiteSpace(app.Configuration.GetConnectionString("ShortenerDb")))
+    throw new InvalidOperationException("ConnectionStrings:ShortenerDb must be configured for PostgreSQL persistence.");
+_ = app.Services.GetRequiredService<NpgsqlDataSource>();
+if (app.Environment.IsDevelopment()) app.MapOpenApi();
+app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
-    app.MapOpenApi();
-}
-
+    var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+    app.Logger.LogError("Request failed. ExceptionType={ExceptionType} StackTrace={StackTrace} CorrelationId={CorrelationId}",
+        exception?.GetType().Name, exception?.StackTrace, context.TraceIdentifier);
+    await Results.Problem(title: "Unable to process the request.", statusCode: 500).ExecuteAsync(context);
+}));
+app.UseForwardedHeaders();
 app.UseHttpsRedirection();
-
-app.MapPost("/api/urls", async (CreateUrlRequest request, IUrlShortenerService shortenerService, CancellationToken cancellationToken) =>
+app.UseAuthentication();
+app.Use(async (context, next) =>
 {
-    if (request is null || string.IsNullOrWhiteSpace(request.OriginalUrl))
-    {
-        return Results.BadRequest(new { error = "OriginalUrl is required." });
-    }
+    if (context.Request.Path.StartsWithSegments("/api/urls/managed") &&
+        context.User.Identity?.IsAuthenticated != true)
+        app.Logger.LogWarning("Managed operation rejected: unauthenticated. CorrelationId={CorrelationId}", context.TraceIdentifier);
+    await next(context);
+});
+app.UseAuthorization();
+app.Lifetime.ApplicationStarted.Register(() => app.Logger.LogInformation("Service started. Service={Service}", "api"));
+app.Lifetime.ApplicationStopping.Register(() => app.Logger.LogInformation("Service stopping. Service={Service}", "api"));
 
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false }).AllowAnonymous();
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") }).AllowAnonymous();
+
+app.MapPost("/api/urls/guest", async (CreateUrlRequest request, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
     try
     {
-        var mapping = await shortenerService.CreateAsync(request.OriginalUrl, request.ShortCode, cancellationToken);
-        var response = new CreateUrlResponse(
-            mapping.ShortCode,
-            mapping.OriginalUrl,
-            $"https://short.ly/{mapping.ShortCode}",
-            mapping.CreatedAtUtc);
+        var mapping = await service.CreateGuestAsync(request.OriginalUrl, request.ShortCode, cancellationToken);
+        return Results.Created($"/r/{mapping.ShortCode}", ToCreateResponse(mapping));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new ApiError(ex.Message)); }
+    catch (ShortCodeConflictException ex) { return Results.Conflict(new ApiError(ex.Message)); }
+}).WithName("CreateGuestLink").AllowAnonymous();
 
-        return Results.CreatedAtRoute("ResolveShortUrl", new { shortCode = mapping.ShortCode }, response);
-    }
-    catch (ArgumentException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-    catch (InvalidOperationException ex)
-    {
-        return Results.Conflict(new { error = ex.Message });
-    }
-})
-.WithName("CreateShortUrl");
-
-app.MapGet("/api/urls/{shortCode}", async (string shortCode, IUrlShortenerService shortenerService, CancellationToken cancellationToken) =>
+app.MapPost("/api/urls/managed", async (CreateUrlRequest request, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
-    var mapping = await shortenerService.ResolveAsync(shortCode, cancellationToken);
-    if (mapping is null)
+    if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
+    try
     {
-        return Results.NotFound(new { error = $"Short code '{shortCode}' was not found." });
+        var outcome = await service.CreateManagedWithOutcomeAsync(tenantId, request.OriginalUrl, request.ShortCode, cancellationToken);
+        return outcome.AlreadyExists
+            ? Results.Ok(ToCreateResponse(outcome.Mapping))
+            : Results.Created($"/api/urls/managed/{outcome.Mapping.ShortCode}", ToCreateResponse(outcome.Mapping));
     }
+    catch (ArgumentException ex) { return Results.BadRequest(new ApiError(ex.Message)); }
+    catch (ShortCodeConflictException ex) { return Results.Conflict(new ApiError(ex.Message)); }
+}).WithName("CreateManagedLink").RequireAuthorization();
 
-    var response = new ResolveUrlResponse(
-        mapping.ShortCode,
-        mapping.OriginalUrl,
-        mapping.CreatedAtUtc,
-        mapping.LastAccessedAtUtc,
-        mapping.HitCount);
-
-    return Results.Ok(response);
-})
-.WithName("ResolveShortUrl");
-
-app.MapGet("/api/urls/{shortCode}/analytics", async (string shortCode, IUrlShortenerService shortenerService, CancellationToken cancellationToken) =>
+app.MapGet("/r/{shortCode}", async (string shortCode, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
-    var mapping = await shortenerService.GetByShortCodeAsync(shortCode, cancellationToken);
-    if (mapping is null)
-    {
-        return Results.NotFound(new { error = $"Short code '{shortCode}' was not found." });
-    }
+    var mapping = await service.ResolveAsync(shortCode, cancellationToken);
+    return mapping is null ? Results.NotFound(new ApiError("Link not found or expired.")) : Results.Redirect(mapping.OriginalUrl);
+}).WithName("ResolveShortUrl").AllowAnonymous();
 
-    var response = new UrlAnalyticsResponse(
-        mapping.ShortCode,
-        mapping.OriginalUrl,
-        mapping.CreatedAtUtc,
-        mapping.LastAccessedAtUtc,
-        mapping.HitCount);
-
-    return Results.Ok(response);
-})
-.WithName("GetShortUrlAnalytics");
-
-app.MapGet("/api/urls/analytics", async (IUrlShortenerService shortenerService, CancellationToken cancellationToken) =>
+app.MapGet("/api/urls/managed/{shortCode}", async (string shortCode, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
-    var mappings = await shortenerService.GetAnalyticsAsync(cancellationToken);
-    var response = mappings
-        .Select(mapping => new UrlAnalyticsResponse(
-            mapping.ShortCode,
-            mapping.OriginalUrl,
-            mapping.CreatedAtUtc,
-            mapping.LastAccessedAtUtc,
-            mapping.HitCount))
-        .ToArray();
+    if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
+    var mapping = await service.GetManagedAsync(tenantId, shortCode, cancellationToken);
+    return mapping is null ? Results.NotFound(new ApiError("Managed link not found.")) : Results.Ok(ToManagedResponse(mapping));
+}).WithName("GetManagedLink").RequireAuthorization();
 
-    return Results.Ok(response);
-})
-.WithName("GetAllAnalytics");
+app.MapGet("/api/urls/managed/{shortCode}/analytics", async (string shortCode, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
+    var mapping = await service.GetManagedAsync(tenantId, shortCode, cancellationToken);
+    return mapping is null ? Results.NotFound(new ApiError("Managed link not found.")) : Results.Ok(ToManagedResponse(mapping));
+}).WithName("GetManagedLinkAnalytics").RequireAuthorization();
+
+app.MapGet("/api/urls/managed/analytics", async (ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
+    var mappings = await service.GetManagedAnalyticsAsync(tenantId, cancellationToken);
+    return Results.Ok(mappings.Select(ToManagedResponse).ToArray());
+}).WithName("GetManagedAnalytics").RequireAuthorization();
+
+if (args.Contains("--migrate", StringComparer.Ordinal))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    await using var db = await scope.ServiceProvider.GetRequiredService<IDbContextFactory<ShortenerDbContext>>().CreateDbContextAsync();
+    await db.Database.MigrateAsync();
+    return;
+}
 
 app.Run();
 
-public record CreateUrlRequest(string OriginalUrl, string? ShortCode = null);
-public record CreateUrlResponse(string ShortCode, string OriginalUrl, string ShortUrl, DateTimeOffset CreatedAtUtc);
-public record ResolveUrlResponse(string ShortCode, string OriginalUrl, DateTimeOffset CreatedAtUtc, DateTimeOffset? LastAccessedAtUtc, int HitCount);
-public record UrlAnalyticsResponse(string ShortCode, string OriginalUrl, DateTimeOffset CreatedAtUtc, DateTimeOffset? LastAccessedAtUtc, int HitCount);
+static void ConfigureTrustedProxy(WebApplicationBuilder builder)
+{
+    var proxyHost = builder.Configuration["ForwardedHeaders:KnownProxyHost"];
+    if (string.IsNullOrWhiteSpace(proxyHost)) return;
+    var addresses = System.Net.Dns.GetHostAddresses(proxyHost);
+    if (addresses.Length == 0) throw new InvalidOperationException("The configured reverse proxy could not be resolved.");
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
+        options.ForwardLimit = 1;
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+        foreach (var address in addresses) options.KnownProxies.Add(address);
+        var publicUrl = builder.Configuration["PublicLinks:BaseUrl"];
+        if (Uri.TryCreate(publicUrl, UriKind.Absolute, out var uri)) options.AllowedHosts.Add(uri.Host);
+    });
+}
 
+static bool TryGetTenant(ClaimsPrincipal principal, HttpContext context, out Guid tenantId)
+{
+    var value = principal.FindFirstValue("tid") ?? principal.FindFirstValue("http://schemas.microsoft.com/identity/claims/tenantid");
+    if (Guid.TryParse(value, out tenantId) && tenantId != Guid.Empty) return true;
+    context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("TenantBoundary")
+        .LogWarning("Managed operation rejected: invalid tenant context. CorrelationId={CorrelationId}", context.TraceIdentifier);
+    return false;
+}
+
+static CreateUrlResponse ToCreateResponse(UrlMapping mapping) => new(
+    mapping.ShortCode, mapping.OriginalUrl, $"/r/{mapping.ShortCode}", mapping.CreatedAtUtc, mapping.ExpiresAtUtc);
+static ManagedUrlResponse ToManagedResponse(UrlMapping mapping) => new(
+    mapping.ShortCode, mapping.OriginalUrl, mapping.CreatedAtUtc, mapping.LastAccessedAtUtc, mapping.HitCount);
+
+public record CreateUrlRequest(string OriginalUrl, string? ShortCode = null);
+public record CreateUrlResponse(string ShortCode, string OriginalUrl, string ShortUrl, DateTimeOffset CreatedAtUtc, DateTimeOffset? ExpiresAtUtc);
+public record ManagedUrlResponse(string ShortCode, string OriginalUrl, DateTimeOffset CreatedAtUtc, DateTimeOffset? LastAccessedAtUtc, int HitCount);
+public record ApiError(string Error);
 public partial class Program { }
+
+public sealed class PostgresHealthCheck(IDbContextFactory<ShortenerDbContext> contextFactory, ILogger<PostgresHealthCheck> logger) : IHealthCheck
+{
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await using var db = await contextFactory.CreateDbContextAsync(cancellationToken);
+            var pending = await db.Database.GetPendingMigrationsAsync(cancellationToken);
+            return pending.Any() ? HealthCheckResult.Unhealthy("PostgreSQL migrations pending.") : HealthCheckResult.Healthy();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning("PostgreSQL readiness failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+            return HealthCheckResult.Unhealthy("PostgreSQL unavailable.");
+        }
+    }
+}
+
+public sealed class RedisHealthCheck(IRedirectCache cache, ILogger<RedisHealthCheck> logger) : IHealthCheck
+{
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        if (await cache.IsAvailableAsync(cancellationToken)) return HealthCheckResult.Healthy();
+        logger.LogWarning("Redis readiness failed; redirect lookup will use PostgreSQL.");
+        return HealthCheckResult.Unhealthy("Redis unavailable.");
+    }
+}

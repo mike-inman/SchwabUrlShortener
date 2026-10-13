@@ -1,7 +1,60 @@
-﻿@page "/"
+@page "/"
+@rendermode InteractiveServer
+@inject IShortenerApiClient Api
+@inject ILogger<Home> Logger
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Create a guest link</PageTitle>
+<h1>Create a guest link</h1>
+<p class="lead">Share a short redirect link without signing in. It expires seven days after creation.</p>
+<p>Guest links are redirect only. They have no analytics or management dashboard.</p>
 
-<h1>Hello, world!</h1>
+<EditForm Model="form" OnSubmit="CreateAsync" FormName="guest-link" class="link-form">
+    <label for="guest-url">Destination URL</label>
+    <input id="guest-url" class="form-control" type="url" required placeholder="https://example.com/page" @bind="form.OriginalUrl" />
+    <label for="guest-code">Custom short code <span class="muted">(optional)</span></label>
+    <input id="guest-code" class="form-control" maxlength="64" @bind="form.ShortCode" />
+    <button class="btn btn-primary" type="submit" disabled="@busy">@(busy ? "Creating…" : "Create guest link")</button>
+</EditForm>
 
-Welcome to your new app.
+@if (busy) { <p role="status">Creating your link…</p> }
+@if (error is not null) { <p class="alert alert-danger" role="alert">@error</p> }
+@if (created is not null)
+{
+    <section class="result" role="status">
+        <h2>Guest link ready</h2>
+        <p><a href="@created.PublicUrl" target="_blank" rel="noopener noreferrer">@created.PublicUrl</a></p>
+        <p>Expires: @created.Link.ExpiresAtUtc?.ToLocalTime().ToString("f")</p>
+        <p class="muted">Save this link now. Guest links have no analytics or management controls.</p>
+    </section>
+}
+
+@code {
+    private readonly LinkForm form = new();
+    private bool busy;
+    private string? error;
+    private LinkResult? created;
+
+    private async Task CreateAsync()
+    {
+        busy = true;
+        error = null;
+        created = null;
+        try
+        {
+            created = await Api.CreateGuestAsync(new(form.OriginalUrl, string.IsNullOrWhiteSpace(form.ShortCode) ? null : form.ShortCode.Trim()));
+        }
+        catch (ShortenerApiException ex) { error = ex.Message; }
+        catch (Exception ex)
+        {
+            Logger.LogError("Guest link creation failed unexpectedly. ExceptionType={ExceptionType}", ex.GetType().Name);
+            error = "Unable to create the link right now. Try again later.";
+        }
+        finally { busy = false; }
+    }
+
+    private sealed class LinkForm
+    {
+        public string OriginalUrl { get; set; } = "";
+        public string? ShortCode { get; set; }
+    }
+}

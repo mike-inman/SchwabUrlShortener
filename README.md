@@ -1,48 +1,45 @@
-# Schwab URL Shortener
+# Schwab URL Shortener Prototype
 
-This .NET 10 solution is being developed for the AI-Proficient Software Engineer assignment. The assignment scope is a URL shortener; the broader design is production-minded and will be implemented in reviewable slices rather than treating the current starter implementation as production-ready.
+Updated: 2026-10-13 13:10 CDT
 
-## Current implementation status
+This repository contains a .NET 10 URL shortener prototype. Anonymous guest links expire after seven days; Entra-authenticated managed links belong to the validated token's tenant. PostgreSQL stores links, managed click outbox events, and aggregate counts. Redis caches public redirect mappings. Kafka carries managed click events to the Analytics worker. A Blazor Server app provides guest creation and a signed-in managed dashboard.
 
-- Domain and Application contain the initial mapping, validation, and create/resolve/analytics flow.
-- Infrastructure and API currently use an in-memory repository. This is temporary implementation state, not the target persistence design.
-- The current API exposes create, resolve-as-JSON, and analytics endpoints. Entra authorization, guest-link expiry, persistent storage, caching, and event-backed analytics are not implemented yet.
-- Unit and API integration tests provide regression coverage for the current behavior; they do not establish production readiness or high-volume capacity.
+## Architecture
 
-## Intended architecture and product behavior
-
-- ASP.NET Core API and Blazor Server operator UI.
-- PostgreSQL as the durable source of truth; Redis as a derived redirect cache; Kafka for managed-link analytics processing.
-- Entra ID protects persistent managed links and their analytics. Public redirects remain anonymous.
-- Anonymous guest links are redirect-only, expire seven days after creation, and do not collect analytics or offer management.
-- Persistent managed links belong to the authenticated Entra tenant and can be managed and analyzed by that tenant.
-- Docker Compose will provide a local integration environment. No numeric throughput or latency target has been provided, so the project will not claim capacity based on architecture alone.
-
-The implementation dependencies, boundaries, and Codex handoffs are documented in [the production-minded slice plan](docs/2026-10-12-1953-production-ready-slices-and-handoffs.md).
-
-## Solution structure
-
-- `src/Shortener.Domain` — mapping types, validation, and business rules.
-- `src/Shortener.Application` — use cases and repository/service interfaces.
-- `src/Shortener.Infrastructure` — persistence and external integration implementations.
-- `src/Shortener.Api` — create, redirect, and analytics HTTP endpoints.
-- `src/Shortener.Analytics` — future background analytics worker.
-- `src/Shortener.Web` — Blazor Server UI.
-- `tests/Shortener.UnitTests` and `tests/Shortener.IntegrationTests` — unit and API/infrastructure regression tests.
+- Domain: `src/Shortener.Domain` — `UrlMapping`, validation helpers, and business rules.
+- Application: `src/Shortener.Application` — guest/managed creation, public resolution, and tenant-scoped management contracts.
+- Infrastructure: `src/Shortener.Infrastructure` — PostgreSQL repository, explicit EF Core migrations, database constraints, durable managed click capture, and disposable Redis redirect cache.
+- API: `src/Shortener.Api` — anonymous guest and redirect routes plus authenticated managed routes.
+- Analytics: `src/Shortener.Analytics` — PostgreSQL outbox publisher, Kafka consumer, deduplication, and tenant-aware aggregate updates.
+- Web: `src/Shortener.Web` — Interactive Server UI that acquires delegated API tokens on the server and calls the API over HTTP.
+- Tests: `tests/Shortener.UnitTests`, `tests/Shortener.IntegrationTests`, and `tests/Shortener.WebTests` — domain, real PostgreSQL/API, and Web regression coverage.
 
 ## Setup
 
 1. Restore .NET dependencies:
    `dotnet restore`
-2. Run the API project:
-   `dotnet run --project src/Shortener.Api/Shortener.Api.csproj`
-3. With the current in-memory API running, test its initial HTTP behavior:
-   - `POST /api/urls` with JSON body
-     `{ "originalUrl": "https://example.com/articles/123", "shortCode": "demo1" }`
-   - `GET /api/urls/{shortCode}` to resolve the code as JSON
-   - `GET /api/urls/{shortCode}/analytics` to review its current hit count and timestamps
+2. Provide `ConnectionStrings__ShortenerDb` through your environment or local secret store. It must point to a PostgreSQL database; no connection string is checked in. The database role applying migrations needs permission to create the `citext` extension and schema objects.
+3. Apply checked-in migrations explicitly before starting the API:
+   `dotnet ef database update --project src/Shortener.Infrastructure/Shortener.Infrastructure.csproj --startup-project src/Shortener.Infrastructure/Shortener.Infrastructure.csproj --context ShortenerDbContext`
+   Repeating this command applies only pending migrations. API startup never changes the schema.
+4. Configure `AzureAd__ClientId` with the API app registration's client ID. `AzureAd:TenantId` defaults to `organizations` for Entra work/school tenants. The API fails closed at startup if either the client ID or PostgreSQL connection string is missing. Managed routes require a delegated API access token with `access_as_user`; an ID token is insufficient.
+5. Provide `ConnectionStrings__Redis` through the environment or local secret store, pointing to a Redis instance accessible by the API. For a disposable loopback-only local instance, use a separate Redis container/port; do not reuse another project's Redis data. The optional `RedirectCache__Namespace` sets a safe ASCII key prefix; the default is `shortener:redirect:v1`. No Redis credential belongs in tracked settings.
+6. Run `dotnet run --project src/Shortener.Api/Shortener.Api.csproj`. `GET /health/live` reports process liveness; `GET /health/ready` checks PostgreSQL access/migrations and Redis availability, returning 503 when a dependency is unavailable. Redis outage still allows redirects through PostgreSQL, while readiness reports the degraded dependency.
+7. Create a Kafka topic for managed clicks and set `Kafka__BootstrapServers`, `Kafka__Topic`, and `Kafka__ConsumerGroup` for the Analytics worker. Configure the same `ConnectionStrings__ShortenerDb` as the API, then run `dotnet run --project src/Shortener.Analytics/Shortener.Analytics.csproj`. The worker needs the Slice 5 migration before startup. A managed redirect commits an outbox row before returning 302; its analytics count updates after Kafka processing. If PostgreSQL capture fails, that redirect returns an error. Kafka downtime leaves the outbox queued for bounded retries; terminal rows require operator inspection and replay.
+8. HTTP contract:
+   - `POST /api/urls/guest` with `{ "originalUrl": "https://example.com/articles/123", "shortCode": "demo1" }` creates an anonymous link with `expiresAtUtc` exactly seven days after creation. `shortCode` is optional.
+   - `POST /api/urls/managed` accepts the same body and requires a valid Entra bearer access token. Tenant ownership comes from the validated token's `tid` claim.
+   - `GET /r/{shortCode}` anonymously redirects active guest or managed links. Expired guest links return 404.
+   - `GET /api/urls/managed/{shortCode}` and `GET /api/urls/managed/{shortCode}/analytics` require authentication and return only the caller's tenant-owned link.
+   - `GET /api/urls/managed/analytics` returns only the caller's tenant-owned links. Guest links have no management or analytics surface.
 
-The current process must remain running for the in-memory data to persist. This setup is for regression/development only; use the completed PostgreSQL and Compose slices for durable local operation.
+Create responses contain a relative `shortUrl` such as `/r/demo1`; the serving domain is chosen by deployment. Short codes are unique across both link modes.
+
+For the Web app, configure `ShortenerApi:BaseUrl` with the server-to-server API origin and `PublicLinks:BaseUrl` with the public origin used in generated links. The latter must be HTTPS or loopback HTTP and must end at the origin root. Non-loopback HTTP for the internal API requires the explicit `ShortenerApi:AllowHttpInternal=true` setting; use it only on a private container network. Configure `ShortenerApi:Scope` with the API's delegated scope. Configure `AzureAd:Instance`, `AzureAd:TenantId`, `AzureAd:ClientId`, and `AzureAd:ClientSecret` for the Web app registration in its separate local secret store or environment, then run `dotnet run --project src/Shortener.Web/Shortener.Web.csproj`. The Web app keeps tokens and the client secret on the server. Guest creation remains available without Web sign-in configuration. The app registration must allow the Web callback URL used locally.
+
+For a portable Docker installation or a single-server custom-domain deployment, use the dated [deployment guide](docs/2026-10-13-1239-portable-local-and-custom-domain-deployment.md). It provides private sample environment files, explicit migrations, public proxy routes, and verification commands. Existing local `.env` files are not used or changed by that workflow.
+
+The [Slice 6 validation record](docs/2026-10-13-1310-slice-6-compose-observability-validation.md) separates the real local Compose results from live Entra and cloud acceptance. Its disposable test profile runs the guarded full solution suite against real PostgreSQL, Redis, and Kafka.
 
 ## Scenarios
 
@@ -57,14 +54,15 @@ The exact assignment details are interpreted through the governing requirement d
 
 ## Validation
 
-Run the solution test suite:
+Run the solution test suite against a real, migrated PostgreSQL test database configured via `ConnectionStrings__ShortenerDb`:
 
 `dotnet test SchwabUrlShortener.slnx --nologo`
 
-The current validation covers short-code rules, URL normalization, hit counting, and a full API workflow for create/resolve/analytics.
+The current tests cover guest expiry, global code uniqueness and races, anonymous redirects, tenant isolation, authorization, restart persistence, managed click capture, Kafka publish retry/replay/deduplication, cancellation, database constraints, Redis hit/miss/outage behavior, readiness failure, and Web components/API-client behavior. API tests use a test-only authentication handler. The integration tests clear only the guarded disposable database `Schwab_test_local`; never point them at the app database. Set `ConnectionStrings__Redis` and `Kafka__BootstrapServers` to isolated real instances for those tests. See [the Slice 5 validation note](docs/2026-10-13-0542-slice-5-kafka-analytics-validation.md) for delivery and operator details.
 
 ## Notes
 
-- Short codes are currently validated to be 4–12 alphanumeric characters.
-- Scheme-less URLs are currently normalized to `https://`; only absolute HTTP and HTTPS URLs are accepted.
-- Do not commit the local assignment PDF, job-description reference, environment files, or credentials.
+- PostgreSQL is the only normal runtime repository. There is no in-memory fallback on connection failure.
+- Redis stores only redirect fields, with a maximum one-hour TTL. Guest TTL is shorter when required by its absolute seven-day expiry. Managed redirects capture a PostgreSQL outbox event on every redirect, including cache hits. Aggregate counts are eventually updated by the Kafka consumer.
+- The short codes are validated to be 4-12 characters with letters and numbers only.
+- URLs are normalized to absolute `http` or `https` addresses when missing a scheme.
