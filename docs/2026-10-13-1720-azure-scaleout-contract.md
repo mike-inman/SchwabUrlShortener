@@ -1,6 +1,6 @@
 # Azure scale-out contract — 2026-10-13 17:20 CDT
 
-Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Change it only by editing this file and telling every active track.
+Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Change it only by editing this file and telling every active track.
 
 ## Purpose
 
@@ -16,6 +16,9 @@ This contract fixes the names and values the tracks share, so no track waits on 
 
 ## Environment
 
+- Azure account: `social@mediaraq.com`. All Azure work for this project uses this login.
+- Subscription: `Azure subscription 1`, ID `baaf4acd-ff40-43d1-a7ba-6089a2c4f41e`, in tenant `mediaraq com` (`eea269ab-1571-48a5-a18c-824ba5859cd5`). Confirmed by Michael on 2026-10-13 for staging. This is the subscription that already holds `rg-schwab-url-shortener-identity`. Before any deployment, `az account show` must report this subscription ID; if it does not, run `az account set --subscription baaf4acd-ff40-43d1-a7ba-6089a2c4f41e` and recheck. The same login can also see two subscriptions in tenant `3d9ba6ab-7f64-43fa-bf44-346b3c2a3fb6`; never deploy there.
+- Do not modify or reuse resources in `rg-schwab-url-shortener-identity` or any other existing resource group in this subscription (`rg-agentengineering-*`, `AzureLeadInterviewLab-rg`, `rg-mynetapp-dev`, `NetworkWatcherRG`).
 - Azure region: `centralus`. If any required SKU (Azure Managed Redis, PostgreSQL Flexible Server General Purpose with built-in PgBouncer, Container Apps workload profiles, Event Hubs Standard) is unavailable there, use `eastus2` and record the reason.
 - Resource group: `rg-shortener-staging`.
 - Naming: `<type>-shortener-<service>-stg`, for example `ca-shortener-api-stg`. Globally unique names (storage, Key Vault, registry, Redis, Event Hubs, PostgreSQL) append `uniqueString(resourceGroup().id)` truncated to 6 characters.
@@ -159,8 +162,8 @@ To keep merges trivial, each track edits only its own hunks of `compose.yaml`:
 
 ## Human prerequisites (Michael)
 
-- Azure subscription with Owner, or Contributor plus User Access Administrator, on `rg-shortener-staging`.
-- `az login` and `azd auth login` on this machine for Track C deployments.
+- Azure subscription confirmed above. Michael needs Owner, or Contributor plus User Access Administrator, on `rg-shortener-staging` as `social@mediaraq.com`.
+- `az login` and `azd auth login` as `social@mediaraq.com` on this machine for Track C deployments.
 - Staging domain and DNS access. Until provided, Track C uses the Front Door `*.azurefd.net` host.
 - Entra redirect URIs for the staging host on the workforce and External ID Web app registrations.
 - Budget alert on the resource group.
