@@ -45,6 +45,8 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 var app = builder.Build();
+if (!ShortenerApiAddress.TryResolve(app.Configuration, out _, out var apiAddressReason))
+    app.Logger.LogWarning("Shortener API base address rejected. Reason={Reason}. Web readiness will fail.", apiAddressReason);
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
@@ -62,13 +64,12 @@ app.UseAntiforgery();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" })).AllowAnonymous();
 app.MapGet("/health/ready", async (IHttpClientFactory clients, IConfiguration configuration, CancellationToken cancellationToken) =>
 {
-    var baseUrl = configuration["ShortenerApi:BaseUrl"];
-    if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var apiBase))
-        return Results.Problem(title: "Shortener API address is not configured.", statusCode: 503);
+    if (!ShortenerApiAddress.TryResolve(configuration, out var apiBase, out _))
+        return Results.Problem(title: "Shortener API address is invalid or not allowed.", statusCode: 503);
     try
     {
         using var response = await clients.CreateClient("availability").GetAsync(
-            new Uri(apiBase, "/health/ready"), cancellationToken);
+            new Uri(apiBase!, "/health/ready"), cancellationToken);
         return response.IsSuccessStatusCode
             ? Results.Ok(new { status = "ready" })
             : Results.Problem(title: "Shortener API is unavailable.", statusCode: 503);

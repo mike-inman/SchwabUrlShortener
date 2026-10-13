@@ -120,9 +120,47 @@ public sealed class ApiClientTests
         Assert.Contains("not configured", ex.Message);
     }
 
-    private static ShortenerApiClient MakeClient(Func<HttpRequestMessage, HttpResponseMessage> respond, string? baseUrl = "https://api.example.test/")
+    [Theory]
+    [InlineData("http://api:8080", null, false)]
+    [InlineData("http://api:8080", "api", true)]
+    [InlineData("http://api:8080", "other, API ", true)]
+    [InlineData("http://unlisted:8080", "api", false)]
+    [InlineData("http://api.evil.test:8080", "api", false)]
+    [InlineData("https://api.example.test", null, true)]
+    [InlineData("http://localhost:8080", null, true)]
+    public void Api_address_validation_uses_exact_internal_host_allowance(
+        string baseUrl, string? allowedHosts, bool expected)
     {
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["ShortenerApi:BaseUrl"] = baseUrl }).Build();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ShortenerApi:BaseUrl"] = baseUrl,
+            ["ShortenerApi:AllowedInternalHttpHosts"] = allowedHosts
+        }).Build();
+        Assert.Equal(expected, ShortenerApiAddress.TryResolve(config, out var resolved, out _));
+        Assert.Equal(expected, resolved is not null);
+    }
+
+    [Fact]
+    public async Task Explicit_compose_host_allowance_enables_signed_in_workspace_calls()
+    {
+        var client = MakeClient(request =>
+        {
+            Assert.Equal("api", request.RequestUri?.Host);
+            Assert.Equal("/api/me/workspaces", request.RequestUri?.AbsolutePath);
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            return Json(HttpStatusCode.OK, "[]");
+        }, baseUrl: "http://api:8080", allowedHosts: "api");
+        Assert.Empty(await client.GetWorkspacesAsync(User));
+    }
+
+    private static ShortenerApiClient MakeClient(Func<HttpRequestMessage, HttpResponseMessage> respond,
+        string? baseUrl = "https://api.example.test/", string? allowedHosts = null)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ShortenerApi:BaseUrl"] = baseUrl,
+            ["ShortenerApi:AllowedInternalHttpHosts"] = allowedHosts
+        }).Build();
         return new(new HttpClient(new DelegateHandler(respond)), new TestTokenProvider(), config, NullLogger<ShortenerApiClient>.Instance);
     }
 

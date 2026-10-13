@@ -48,13 +48,9 @@ public sealed class ShortenerApiClient : IShortenerApiClient
         _http = http;
         _tokens = tokens;
         _logger = logger;
-        var configured = configuration["ShortenerApi:BaseUrl"];
-        if (Uri.TryCreate(configured, UriKind.Absolute, out var uri) &&
-            (uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback)) &&
-            uri.AbsolutePath == "/" && string.IsNullOrEmpty(uri.UserInfo) &&
-            string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment))
+        if (ShortenerApiAddress.TryResolve(configuration, out var uri, out _))
         {
-            _baseUri = new Uri(uri.GetLeftPart(UriPartial.Authority) + "/");
+            _baseUri = uri;
             _http.BaseAddress = _baseUri;
         }
     }
