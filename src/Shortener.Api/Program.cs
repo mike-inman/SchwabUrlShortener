@@ -29,7 +29,13 @@ builder.Services.AddSingleton<IUrlShortenerService, UrlShortenerService>();
 builder.Services.AddHealthChecks().AddCheck<PostgresHealthCheck>("postgres", tags: ["ready"]);
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration, "AzureAd");
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .RequireScope("access_as_user")
+        .Build();
+});
 
 var app = builder.Build();
 // A real app registration is required. No demo tenant or identity is installed at runtime.

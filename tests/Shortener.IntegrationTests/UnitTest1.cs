@@ -93,6 +93,16 @@ public class ShortenerApiTests
     }
 
     [Fact]
+    public async Task ManagedEndpointsRequireDelegatedScope()
+    {
+        using var factory = new TestFactory(resetDatabase: false);
+        using var missingScope = ClientFor(factory, TenantA, scope: null);
+        using var wrongScope = ClientFor(factory, TenantA, scope: "other_scope");
+        Assert.Equal(HttpStatusCode.Forbidden, (await missingScope.GetAsync("/api/urls/managed/analytics")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await wrongScope.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com" })).StatusCode);
+    }
+
+    [Fact]
     public async Task LinksSurviveApiHostRestart()
     {
         using (var first = new TestFactory())
@@ -180,10 +190,11 @@ public class ShortenerApiTests
         Assert.Equal("ck_url_mappings_link_mode", missingExpiry.ConstraintName);
     }
 
-    private static HttpClient ClientFor(TestFactory factory, Guid tenant)
+    private static HttpClient ClientFor(TestFactory factory, Guid tenant, string? scope = "access_as_user")
     {
         var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
         client.DefaultRequestHeaders.Add("X-Test-Tenant", tenant.ToString());
+        if (scope is not null) client.DefaultRequestHeaders.Add("X-Test-Scope", scope);
         return client;
     }
 
@@ -250,7 +261,9 @@ public class ShortenerApiTests
         {
             if (!Request.Headers.TryGetValue("X-Test-Tenant", out var value))
                 return Task.FromResult(AuthenticateResult.NoResult());
-            var principal = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("tid", value.ToString()) }, "Test"));
+            var claims = new List<Claim> { new("tid", value.ToString()) };
+            if (Request.Headers.TryGetValue("X-Test-Scope", out var scope)) claims.Add(new Claim("scp", scope.ToString()));
+            var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"));
             return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(principal, "Test")));
         }
     }
