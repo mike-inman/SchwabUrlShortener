@@ -7,7 +7,7 @@
 @inject IdentityAvailability Identity
 @inject NavigationManager Navigation
 
-<PageTitle>Managed links</PageTitle>
+<PageTitle>My links · @BrandText.TitleSuffix</PageTitle>
 @if (notice is not null)
 {
     <div class="toast-container position-fixed top-0 end-0 p-3 dashboard-toast-container" aria-live="polite" aria-atomic="true">
@@ -20,7 +20,7 @@
         </div>
     </div>
 }
-<h1>Managed links</h1>
+<h1>My links</h1>
 <p class="lead">Create persistent links for your @(Identity.Customer ? "workspace" : "signed-in organization") and review redirect counts.</p>
 
 @if (!Identity.Configured)

@@ -3,6 +3,7 @@ using Bunit;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Shortener.Web.Components.Layout;
 using Shortener.Web.Components.Pages;
 using Shortener.Web.Services;
 using Xunit;
@@ -14,6 +15,23 @@ public sealed class ComponentTests : BunitContext
     private static readonly CreatedLink Created = new("abc", "https://example.com", "/r/abc",
         new DateTimeOffset(2026, 10, 12, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero));
     private static readonly ManagedLink Managed = new("abc", "https://example.com", Created.CreatedAtUtc, null, 4);
+
+    [Fact]
+    public void Brand_navigation_and_home_keep_accessible_guest_form()
+    {
+        AddAuthorization();
+        Setup();
+        var navigation = Render<NavMenu>();
+        Assert.Equal("Ziplio home", navigation.Find("a.brand").GetAttribute("aria-label"));
+        Assert.Contains("ziplio", navigation.Find("a.brand span").TextContent);
+
+        var home = Render<Home>();
+        Assert.Equal("Every link deserves a smarter destination.", home.Find("h1").TextContent);
+        Assert.Equal("Try a guest link", home.Find("#guest-title").TextContent);
+        Assert.Equal("true", home.Find(".zl-demo").GetAttribute("aria-hidden"));
+        Assert.NotNull(home.Find("#guest-url"));
+        Assert.NotNull(home.Find("#guest-code"));
+    }
 
     [Fact]
     public async Task Guest_form_shows_loading_then_expiry_without_management_controls()
@@ -57,6 +75,7 @@ public sealed class ComponentTests : BunitContext
         api.Analytics = _ => Task.FromResult(Managed);
         var view = Render<Dashboard>();
         view.WaitForAssertion(() => Assert.Contains("Your links", view.Markup));
+        Assert.Equal("My links", view.Find("h1").TextContent);
         Assert.Contains("abc", view.Markup);
         view.Find("#managed-url").Change("https://example.com");
         await view.Find("form").SubmitAsync();
