@@ -48,7 +48,7 @@ Run the solution test suite against a real, migrated PostgreSQL test database co
 
 `dotnet test SchwabUrlShortener.slnx --nologo`
 
-The current tests cover guest expiry, global code uniqueness and races, anonymous redirects, tenant isolation, authorization, restart persistence, concurrent managed analytics, cancellation, database constraints, and readiness failure. API tests use a test-only authentication handler; live Entra token validation still requires an app registration and tenant verification. The integration tests clear the `url_mappings` table and refuse databases whose names do not start with `schwab_slice2_test_`; use a disposable database with that prefix.
+The current tests cover guest expiry, global code uniqueness and races, anonymous redirects, tenant isolation, authorization, restart persistence, concurrent managed analytics, cancellation, database constraints, and readiness failure. API tests use a test-only authentication handler; live Entra token validation still requires an app registration and tenant verification. The integration tests clear the `url_mappings` table and accept only the disposable database `Schwab_test_local`. Never point them at the app database.
 
 ## Notes
 

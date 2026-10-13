@@ -208,8 +208,8 @@ public class ShortenerApiTests
             ConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__ShortenerDb")
                 ?? throw new InvalidOperationException("Real PostgreSQL test connection must be provided in ConnectionStrings__ShortenerDb.");
             var databaseName = new NpgsqlConnectionStringBuilder(ConnectionString).Database;
-            if (databaseName is null || !databaseName.StartsWith("schwab_slice2_test_", StringComparison.Ordinal))
-                throw new InvalidOperationException("Integration tests require a disposable database named schwab_slice2_test_*.");
+            if (databaseName != "Schwab_test_local")
+                throw new InvalidOperationException("Integration tests require the disposable database Schwab_test_local.");
             _unavailableDatabase = unavailableDatabase;
             if (!resetDatabase) return;
             using var connection = new NpgsqlConnection(ConnectionString);
