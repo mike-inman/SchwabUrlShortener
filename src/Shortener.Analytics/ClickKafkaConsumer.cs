@@ -36,10 +36,18 @@ public sealed class ClickKafkaConsumer : IDisposable
             return ConsumeOutcome.Retry;
         }
         _pendingOffset = result.TopicPartitionOffset;
-        ManagedClickEventV1? click = null;
+        IManagedClickEvent? click = null;
         try
         {
-            click = JsonSerializer.Deserialize<ManagedClickEventV1>(result.Message.Value);
+            using var document = JsonDocument.Parse(result.Message.Value);
+            var version = document.RootElement.TryGetProperty("Version", out var versionElement)
+                ? versionElement.GetInt32() : 1;
+            click = version switch
+            {
+                1 => JsonSerializer.Deserialize<ManagedClickEventV1>(result.Message.Value),
+                2 => JsonSerializer.Deserialize<ManagedClickEventV2>(result.Message.Value),
+                _ => throw new InvalidClickEventException("unsupported_version")
+            };
             if (click is null || !click.IsValid() || result.Message.Key != click.MappingId)
                 throw new InvalidClickEventException("invalid_event");
             var applied = await _store.ApplyAsync(click, cancellationToken);
@@ -49,8 +57,8 @@ public sealed class ClickKafkaConsumer : IDisposable
             _failureCount = 0;
             if (applied) ClickAnalyticsMetrics.Consumed.Add(1); else ClickAnalyticsMetrics.Deduplicated.Add(1);
             RecordLag(result);
-            _logger.LogInformation("Click {Outcome}. EventId={EventId} TenantId={TenantId} MappingId={MappingId} TraceId={TraceId}",
-                applied ? "consumed" : "deduplicated", click.EventId, click.TenantId, click.MappingId, click.TraceId);
+            _logger.LogInformation("Click {Outcome}. EventId={EventId} Version={Version} MappingId={MappingId} TraceId={TraceId}",
+                applied ? "consumed" : "deduplicated", click.EventId, click.Version, click.MappingId, click.TraceId);
             return applied ? ConsumeOutcome.Applied : ConsumeOutcome.Duplicate;
         }
         catch (Exception ex) when (ex is JsonException or InvalidClickEventException)
@@ -73,8 +81,8 @@ public sealed class ClickKafkaConsumer : IDisposable
             _lastFailure = null;
             _failureCount = 0;
             ClickAnalyticsMetrics.Failed.Add(1);
-            _logger.LogWarning("Click dead-lettered. EventId={EventId} TenantId={TenantId} MappingId={MappingId} Reason={Reason}",
-                click?.EventId, click?.TenantId, click?.MappingId, reason);
+            _logger.LogWarning("Click dead-lettered. EventId={EventId} Version={Version} MappingId={MappingId} Reason={Reason}",
+                click?.EventId, click?.Version, click?.MappingId, reason);
             return ConsumeOutcome.DeadLettered;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -89,8 +97,8 @@ public sealed class ClickKafkaConsumer : IDisposable
                     _consumer.Commit(result);
                     _pendingOffset = null;
                     ClickAnalyticsMetrics.Failed.Add(1);
-                    _logger.LogError("Click processing exhausted and dead-lettered. EventId={EventId} TenantId={TenantId} MappingId={MappingId} ExceptionType={ExceptionType}",
-                        click?.EventId, click?.TenantId, click?.MappingId, ex.GetType().Name);
+                    _logger.LogError("Click processing exhausted and dead-lettered. EventId={EventId} Version={Version} MappingId={MappingId} ExceptionType={ExceptionType}",
+                        click?.EventId, click?.Version, click?.MappingId, ex.GetType().Name);
                     _lastFailure = null;
                     _failureCount = 0;
                     return ConsumeOutcome.DeadLettered;
@@ -114,15 +122,15 @@ public sealed class ClickKafkaConsumer : IDisposable
         }
     }
 
-    private ConsumeOutcome SeekForRetry(ConsumeResult<string, string> result, ManagedClickEventV1? click, Exception error)
+    private ConsumeOutcome SeekForRetry(ConsumeResult<string, string> result, IManagedClickEvent? click, Exception error)
     {
         // Keep the marker until a successful commit. If Seek throws, the next call
         // retries it before Consume can move forward.
         _pendingOffset = result.TopicPartitionOffset;
         _consumer.Seek(result.TopicPartitionOffset);
         ClickAnalyticsMetrics.Retried.Add(1);
-        _logger.LogWarning("Click processing retry. EventId={EventId} TenantId={TenantId} MappingId={MappingId} Attempt={Attempt} ExceptionType={ExceptionType}",
-            click?.EventId, click?.TenantId, click?.MappingId, _failureCount, error.GetType().Name);
+        _logger.LogWarning("Click processing retry. EventId={EventId} Version={Version} MappingId={MappingId} Attempt={Attempt} ExceptionType={ExceptionType}",
+            click?.EventId, click?.Version, click?.MappingId, _failureCount, error.GetType().Name);
         return ConsumeOutcome.Retry;
     }
 

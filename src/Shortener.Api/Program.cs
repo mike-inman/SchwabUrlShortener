@@ -25,6 +25,7 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddDbContextFactory<ShortenerDbContext>((sp, options) =>
     options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
 builder.Services.AddSingleton<IUrlShortenerRepository, PostgresUrlShortenerRepository>();
+builder.Services.AddSingleton<IWorkspaceLinkAccess, PostgresWorkspaceLinkAccess>();
 builder.Services.AddSingleton<IRedirectCache>(sp => new RedisRedirectCache(
     sp.GetRequiredService<IConfiguration>().GetConnectionString("Redis"),
     sp.GetRequiredService<IConfiguration>()["RedirectCache:Namespace"]));
@@ -34,6 +35,7 @@ builder.Services.AddHealthChecks()
     .AddCheck<RedisHealthCheck>("redis", tags: ["ready"]);
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration, "AzureAd");
+builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options => options.MapInboundClaims = false);
 builder.Services.AddAuthorization(options =>
 {
     options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
@@ -123,6 +125,49 @@ app.MapGet("/api/urls/managed/analytics", async (ClaimsPrincipal principal, Http
     return Results.Ok(mappings.Select(ToManagedResponse).ToArray());
 }).WithName("GetManagedAnalytics").RequireAuthorization();
 
+var workspaceManaged = app.MapGroup("/api/workspaces/{workspaceId:guid}/urls/managed").RequireAuthorization();
+workspaceManaged.MapPost("", async (Guid workspaceId, CreateUrlRequest request, ClaimsPrincipal principal,
+    HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    if (!TryGetValidatedIdentity(principal, context, out var issuer, out var subject)) return Results.Forbid();
+    try
+    {
+        var outcome = await service.CreateWorkspaceManagedAsync(issuer, subject, workspaceId,
+            request.OriginalUrl, request.ShortCode, cancellationToken);
+        if (outcome is null) return Results.NotFound(new ApiError("Workspace not found."));
+        return outcome.Value.AlreadyExists ? Results.Ok(ToCreateResponse(outcome.Value.Mapping))
+            : Results.Created($"/api/workspaces/{workspaceId}/urls/managed/{outcome.Value.Mapping.ShortCode}",
+                ToCreateResponse(outcome.Value.Mapping));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new ApiError(ex.Message)); }
+    catch (ShortCodeConflictException ex) { return Results.Conflict(new ApiError(ex.Message)); }
+}).WithName("CreateWorkspaceManagedLink");
+
+workspaceManaged.MapGet("/analytics", async (Guid workspaceId, ClaimsPrincipal principal, HttpContext context,
+    IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    if (!TryGetValidatedIdentity(principal, context, out var issuer, out var subject)) return Results.Forbid();
+    var mappings = await service.GetWorkspaceAnalyticsAsync(issuer, subject, workspaceId, cancellationToken);
+    return mappings is null ? Results.NotFound(new ApiError("Workspace not found."))
+        : Results.Ok(mappings.Select(ToManagedResponse).ToArray());
+}).WithName("GetWorkspaceManagedAnalytics");
+
+workspaceManaged.MapGet("/{shortCode}", async (Guid workspaceId, string shortCode, ClaimsPrincipal principal,
+    HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    if (!TryGetValidatedIdentity(principal, context, out var issuer, out var subject)) return Results.Forbid();
+    var mapping = await service.GetWorkspaceManagedAsync(issuer, subject, workspaceId, shortCode, cancellationToken);
+    return mapping is null ? Results.NotFound(new ApiError("Managed link not found.")) : Results.Ok(ToManagedResponse(mapping));
+}).WithName("GetWorkspaceManagedLink");
+
+workspaceManaged.MapGet("/{shortCode}/analytics", async (Guid workspaceId, string shortCode, ClaimsPrincipal principal,
+    HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+{
+    if (!TryGetValidatedIdentity(principal, context, out var issuer, out var subject)) return Results.Forbid();
+    var mapping = await service.GetWorkspaceManagedAsync(issuer, subject, workspaceId, shortCode, cancellationToken);
+    return mapping is null ? Results.NotFound(new ApiError("Managed link not found.")) : Results.Ok(ToManagedResponse(mapping));
+}).WithName("GetWorkspaceManagedLinkAnalytics");
+
 app.Run();
 
 static bool TryGetTenant(ClaimsPrincipal principal, HttpContext context, out Guid tenantId)
@@ -131,6 +176,19 @@ static bool TryGetTenant(ClaimsPrincipal principal, HttpContext context, out Gui
     if (Guid.TryParse(value, out tenantId) && tenantId != Guid.Empty) return true;
     context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("TenantBoundary")
         .LogWarning("Managed operation rejected: invalid tenant context. CorrelationId={CorrelationId}", context.TraceIdentifier);
+    return false;
+}
+
+static bool TryGetValidatedIdentity(ClaimsPrincipal principal, HttpContext context, out string issuer, out string subject)
+{
+    issuer = principal.FindFirstValue("iss") ?? string.Empty;
+    subject = principal.FindFirstValue("sub") ?? string.Empty;
+    if (principal.Identity?.IsAuthenticated == true &&
+        Uri.TryCreate(issuer, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps &&
+        !string.IsNullOrWhiteSpace(subject) && subject.Length <= 500 && issuer.Length <= 500)
+        return true;
+    context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("WorkspaceBoundary")
+        .LogWarning("Workspace operation rejected: missing validated identity claims. CorrelationId={CorrelationId}", context.TraceIdentifier);
     return false;
 }
 

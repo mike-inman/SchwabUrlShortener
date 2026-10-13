@@ -64,7 +64,7 @@ public sealed class AccountOwnershipMigrationTests
             var processedBefore = await Scalar<string>(db, "SELECT jsonb_agg(to_jsonb(entry) ORDER BY event_id)::text FROM processed_click_events AS entry");
             var deadLettersBefore = await Scalar<string>(db, "SELECT jsonb_agg(to_jsonb(entry) ORDER BY offset_id)::text FROM click_dead_letters AS entry");
 
-            await migrator.MigrateAsync();
+            await migrator.MigrateAsync("20261013121515_AccountOwnershipFoundation");
             Assert.Equal(before, await Counts(db));
             Assert.Equal(mappingDataBefore, await Scalar<string>(db, """
                 SELECT jsonb_agg(jsonb_build_object('id', id, 'short_code', short_code::text,
@@ -84,7 +84,7 @@ public sealed class AccountOwnershipMigrationTests
                 """));
             Assert.Equal(1L, await Scalar<long>(db, "SELECT count(*) FROM url_mappings WHERE mode = 0 AND owner_workspace_id IS NULL"));
 
-            await migrator.MigrateAsync();
+            await migrator.MigrateAsync("20261013121515_AccountOwnershipFoundation");
             Assert.Equal(before, await Counts(db));
             Assert.Equal(2L, await Scalar<long>(db, "SELECT count(*) FROM workspaces"));
 

@@ -39,3 +39,7 @@ The focused integration test used a fresh temporary schema in the guarded `Schwa
 Next: connect validated access-token identity and selected workspace to managed API operations, preserving legacy behavior, then implement workspace-scoped persistence and versioned analytics before any cutover.
 
 Live Entra, Google, deployment, production migration, and operational acceptance are not claimed.
+
+## API/event transition outcome — 2026-10-13 08:41 CDT
+
+The workspace API and event transition were implemented on this branch after handoff commit `664591b`. Explicit workspace routes now authorize the validated token's issuer plus stable subject against personal ownership or team membership on each create, detail, and analytics operation. The existing tenant routes remain. Workspace-owned mappings and V2 click events are durable; V1 tenant events and old cached redirects remain compatible. The follow-up customer identity assessment is in `docs/2026-10-13-0836-customer-identity-external-id-assessment-plan.md`. See `docs/2026-10-13-0841-workspace-authorization-api-event-validation.md` for exact local checks, recovery, and remaining gates.

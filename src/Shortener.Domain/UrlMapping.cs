@@ -24,6 +24,21 @@ public sealed class UrlMapping
         return Create(originalUrl, shortCode, LinkMode.Managed, tenantId, createdAtUtc);
     }
 
+    public static UrlMapping CreateWorkspaceManaged(string originalUrl, string shortCode, Guid workspaceId, DateTimeOffset createdAtUtc)
+    {
+        if (workspaceId == Guid.Empty) throw new ArgumentException("A valid workspace is required.", nameof(workspaceId));
+        var mapping = Create(originalUrl, shortCode, LinkMode.Managed, null, createdAtUtc);
+        mapping.OwnerWorkspaceId = workspaceId;
+        return mapping;
+    }
+
+    public void AssignLegacyWorkspace(Guid workspaceId)
+    {
+        if (Mode != LinkMode.Managed || TenantId is null || workspaceId == Guid.Empty)
+            throw new InvalidOperationException("Only a legacy managed link can receive a legacy workspace.");
+        OwnerWorkspaceId = workspaceId;
+    }
+
     private static UrlMapping Create(string originalUrl, string shortCode, LinkMode mode, Guid? tenantId, DateTimeOffset createdAtUtc)
     {
         var normalizedUrl = UrlValidation.NormalizeUrl(originalUrl);

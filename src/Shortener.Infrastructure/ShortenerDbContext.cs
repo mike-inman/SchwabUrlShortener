@@ -19,8 +19,8 @@ public sealed class ShortenerDbContext(DbContextOptions<ShortenerDbContext> opti
         {
             entity.ToTable("url_mappings", table => table.HasCheckConstraint(
                 "ck_url_mappings_link_mode",
-                "(mode = 0 AND tenant_id IS NULL AND expires_at_utc IS NOT NULL AND expires_at_utc = created_at_utc + INTERVAL '168 hours' AND last_accessed_at_utc IS NULL AND hit_count = 0) OR " +
-                "(mode = 1 AND tenant_id IS NOT NULL AND tenant_id <> '00000000-0000-0000-0000-000000000000'::uuid AND expires_at_utc IS NULL AND hit_count >= 0)"));
+                "(mode = 0 AND tenant_id IS NULL AND owner_workspace_id IS NULL AND expires_at_utc IS NOT NULL AND expires_at_utc = created_at_utc + INTERVAL '168 hours' AND last_accessed_at_utc IS NULL AND hit_count = 0) OR " +
+                "(mode = 1 AND owner_workspace_id IS NOT NULL AND (tenant_id IS NULL OR tenant_id <> '00000000-0000-0000-0000-000000000000'::uuid) AND expires_at_utc IS NULL AND hit_count >= 0)"));
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedNever();
             entity.Property(x => x.ShortCode).HasColumnName("short_code").HasColumnType("citext").HasMaxLength(12).IsRequired();
@@ -30,6 +30,8 @@ public sealed class ShortenerDbContext(DbContextOptions<ShortenerDbContext> opti
             entity.Property(x => x.OwnerWorkspaceId).HasColumnName("owner_workspace_id");
             entity.HasOne<Workspace>().WithMany().HasForeignKey(x => x.OwnerWorkspaceId).OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => x.OwnerWorkspaceId).HasDatabaseName("ix_url_mappings_owner_workspace");
+            entity.HasIndex(x => new { x.OwnerWorkspaceId, x.CreatedAtUtc })
+                .HasDatabaseName("ix_url_mappings_workspace_created").HasFilter("mode = 1");
             entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
             entity.Property(x => x.ExpiresAtUtc).HasColumnName("expires_at_utc");
             entity.Property(x => x.LastAccessedAtUtc).HasColumnName("last_accessed_at_utc");

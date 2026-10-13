@@ -73,6 +73,10 @@ namespace Shortener.Infrastructure.Migrations
                     b.HasIndex("OwnerWorkspaceId")
                         .HasDatabaseName("ix_url_mappings_owner_workspace");
 
+                    b.HasIndex("OwnerWorkspaceId", "CreatedAtUtc")
+                        .HasDatabaseName("ix_url_mappings_workspace_created")
+                        .HasFilter("mode = 1");
+
                     b.HasIndex("ShortCode")
                         .IsUnique()
                         .HasDatabaseName("ux_url_mappings_short_code");
@@ -85,7 +89,7 @@ namespace Shortener.Infrastructure.Migrations
 
                     b.ToTable("url_mappings", null, t =>
                         {
-                            t.HasCheckConstraint("ck_url_mappings_link_mode", "(mode = 0 AND tenant_id IS NULL AND expires_at_utc IS NOT NULL AND expires_at_utc = created_at_utc + INTERVAL '168 hours' AND last_accessed_at_utc IS NULL AND hit_count = 0) OR (mode = 1 AND tenant_id IS NOT NULL AND tenant_id <> '00000000-0000-0000-0000-000000000000'::uuid AND expires_at_utc IS NULL AND hit_count >= 0)");
+                            t.HasCheckConstraint("ck_url_mappings_link_mode", "(mode = 0 AND tenant_id IS NULL AND owner_workspace_id IS NULL AND expires_at_utc IS NOT NULL AND expires_at_utc = created_at_utc + INTERVAL '168 hours' AND last_accessed_at_utc IS NULL AND hit_count = 0) OR (mode = 1 AND owner_workspace_id IS NOT NULL AND (tenant_id IS NULL OR tenant_id <> '00000000-0000-0000-0000-000000000000'::uuid) AND expires_at_utc IS NULL AND hit_count >= 0)");
                         });
                 });
 
