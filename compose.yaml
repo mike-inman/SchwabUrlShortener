@@ -130,7 +130,6 @@ services:
       PublicLinks__BaseUrl: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL in the chosen env file}
       AllowedHosts: ${PUBLIC_DOMAIN:-localhost}
       ForwardedHeaders__KnownProxyHost: proxy
-      ConnectionStrings__Redis: redis:6379
       TokenCache__Mode: Distributed
       TokenCache__InstanceName: "shortener:web:tokens:"
       DataProtection__Mode: Filesystem
