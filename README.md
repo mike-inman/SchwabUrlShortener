@@ -1,8 +1,8 @@
 # Schwab URL Shortener Prototype
 
-Updated: 2026-10-12 21:01 CDT
+Updated: 2026-10-12 23:42 CDT
 
-This repository contains a .NET 10 URL shortener prototype. Slice 1 separates anonymous seven-day guest links from Entra-authenticated, tenant-owned managed links. Slice 2 stores links and managed analytics in PostgreSQL across API restarts.
+This repository contains a .NET 10 URL shortener prototype. Anonymous guest links expire after seven days; Entra-authenticated managed links belong to the validated token's tenant. PostgreSQL stores links and managed redirect counts. A Blazor Server app provides guest creation and a signed-in managed dashboard.
 
 ## Architecture
 
@@ -10,7 +10,8 @@ This repository contains a .NET 10 URL shortener prototype. Slice 1 separates an
 - Application: `src/Shortener.Application` — guest/managed creation, public resolution, and tenant-scoped management contracts.
 - Infrastructure: `src/Shortener.Infrastructure` — PostgreSQL repository, explicit EF Core migrations, database constraints, and atomic managed hit updates.
 - API: `src/Shortener.Api` — anonymous guest and redirect routes plus authenticated managed routes.
-- Tests: `tests/Shortener.UnitTests` and `tests/Shortener.IntegrationTests` — focused validation around validation rules and end-to-end workflows.
+- Web: `src/Shortener.Web` — Interactive Server UI that acquires delegated API tokens on the server and calls the API over HTTP.
+- Tests: `tests/Shortener.UnitTests`, `tests/Shortener.IntegrationTests`, and `tests/Shortener.WebTests` — domain, real PostgreSQL/API, and Web regression coverage.
 
 ## Setup
 
@@ -20,7 +21,7 @@ This repository contains a .NET 10 URL shortener prototype. Slice 1 separates an
 3. Apply checked-in migrations explicitly before starting the API:
    `dotnet ef database update --project src/Shortener.Infrastructure/Shortener.Infrastructure.csproj --startup-project src/Shortener.Infrastructure/Shortener.Infrastructure.csproj --context ShortenerDbContext`
    Repeating this command applies only pending migrations. API startup never changes the schema.
-4. Configure `AzureAd__ClientId` with the API app registration's client ID. `AzureAd:TenantId` defaults to `organizations` for Entra work/school tenants. The API fails closed at startup if either the client ID or PostgreSQL connection string is missing. Register the API as multi-tenant in Entra and request an access token for its audience; do not use an ID token.
+4. Configure `AzureAd__ClientId` with the API app registration's client ID. `AzureAd:TenantId` defaults to `organizations` for Entra work/school tenants. The API fails closed at startup if either the client ID or PostgreSQL connection string is missing. Managed routes require a delegated API access token with `access_as_user`; an ID token is insufficient.
 5. Run `dotnet run --project src/Shortener.Api/Shortener.Api.csproj`. `GET /health/live` reports process liveness; `GET /health/ready` checks database access and pending migrations, returning 503 when unavailable or unmigrated.
 6. HTTP contract:
    - `POST /api/urls/guest` with `{ "originalUrl": "https://example.com/articles/123", "shortCode": "demo1" }` creates an anonymous link with `expiresAtUtc` exactly seven days after creation. `shortCode` is optional.
@@ -30,6 +31,8 @@ This repository contains a .NET 10 URL shortener prototype. Slice 1 separates an
    - `GET /api/urls/managed/analytics` returns only the caller's tenant-owned links. Guest links have no management or analytics surface.
 
 Create responses contain a relative `shortUrl` such as `/r/demo1`; the serving domain is chosen by deployment. Short codes are unique across both link modes.
+
+For the Web app, configure `ShortenerApi:BaseUrl` with the API origin and `ShortenerApi:Scope` with the API's delegated scope. Configure `AzureAd:Instance`, `AzureAd:TenantId`, `AzureAd:ClientId`, and `AzureAd:ClientSecret` for the Web app registration in its separate local secret store or environment, then run `dotnet run --project src/Shortener.Web/Shortener.Web.csproj`. The Web app keeps tokens and the client secret on the server. Guest creation remains available without Web sign-in configuration. The app registration must allow the Web callback URL used locally.
 
 ## Scenarios
 
@@ -48,7 +51,7 @@ Run the solution test suite against a real, migrated PostgreSQL test database co
 
 `dotnet test SchwabUrlShortener.slnx --nologo`
 
-The current tests cover guest expiry, global code uniqueness and races, anonymous redirects, tenant isolation, authorization, restart persistence, concurrent managed analytics, cancellation, database constraints, and readiness failure. API tests use a test-only authentication handler; live Entra token validation still requires an app registration and tenant verification. The integration tests clear the `url_mappings` table and accept only the disposable database `Schwab_test_local`. Never point them at the app database.
+The current tests cover guest expiry, global code uniqueness and races, anonymous redirects, tenant isolation, authorization, restart persistence, concurrent managed analytics, cancellation, database constraints, readiness failure, and Web components/API-client behavior. API tests use a test-only authentication handler. The integration tests clear the `url_mappings` table and accept only the disposable database `Schwab_test_local`. Never point them at the app database. See [the integration validation note](docs/2026-10-12-2342-slices-1-3-integration-validation.md) for local observations and remaining live Entra gaps.
 
 ## Notes
 
