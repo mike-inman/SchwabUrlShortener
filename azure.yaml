@@ -1,0 +1,19 @@
+name: schwab-url-shortener
+infra:
+  provider: bicep
+  path: infra
+  module: main
+services:
+  api:
+    host: containerapp
+    image: ${SERVICE_API_IMAGE}
+  web:
+    host: containerapp
+    image: ${SERVICE_WEB_IMAGE}
+  analytics:
+    host: containerapp
+    image: ${SERVICE_ANALYTICS_IMAGE}
+hooks:
+  predeploy:
+    shell: sh
+    run: ./infra/scripts/build-images.sh
