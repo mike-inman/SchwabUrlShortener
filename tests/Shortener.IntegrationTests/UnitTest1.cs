@@ -550,6 +550,11 @@ public class ShortenerApiTests
             using var wrongIssuer = Identity(0, "https://issuer.example/wrong");
             using var missingIssuer = Identity(0, null);
             using var missingSubject = Identity(0, includeSubject: false);
+            using var firstLogin = Identity(99);
+            var newPersonal = Assert.Single((await firstLogin.GetFromJsonAsync<CustomerWorkspace[]>("/api/me/workspaces"))!);
+            Assert.Equal(WorkspaceKind.Personal, newPersonal.Kind);
+            Assert.Equal(newPersonal.Id, Assert.Single((await firstLogin.GetFromJsonAsync<CustomerWorkspace[]>("/api/me/workspaces"))!).Id);
+            Assert.DoesNotContain(newPersonal.Id, (await owner.GetFromJsonAsync<CustomerWorkspace[]>("/api/me/workspaces"))!.Select(x => x.Id));
             using var missingScope = factory.CreateClient(new WebApplicationFactoryClientOptions
                 { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
             missingScope.DefaultRequestHeaders.Add("X-Test-Subject", "person-0");

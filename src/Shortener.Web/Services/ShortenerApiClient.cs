@@ -11,6 +11,7 @@ public sealed record CreatedLink(string ShortCode, string OriginalUrl, string Sh
     DateTimeOffset CreatedAtUtc, DateTimeOffset? ExpiresAtUtc);
 public sealed record ManagedLink(string ShortCode, string OriginalUrl, DateTimeOffset CreatedAtUtc,
     DateTimeOffset? LastAccessedAtUtc, int HitCount);
+public sealed record WorkspaceSummary(Guid Id, string Name, int Kind);
 public sealed record LinkResult(CreatedLink Link, Uri PublicUrl, bool AlreadyExists = false);
 
 public interface IShortenerApiClient
@@ -20,6 +21,16 @@ public interface IShortenerApiClient
     Task<IReadOnlyList<ManagedLink>> GetManagedLinksAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default);
     Task<ManagedLink> GetManagedLinkAsync(string shortCode, ClaimsPrincipal user, CancellationToken cancellationToken = default);
     Task<ManagedLink> GetManagedAnalyticsAsync(string shortCode, ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<WorkspaceSummary>> GetWorkspacesAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+    Task<LinkResult> CreateWorkspaceManagedAsync(Guid workspaceId, CreateLinkRequest request, ClaimsPrincipal user,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    Task<IReadOnlyList<ManagedLink>> GetWorkspaceManagedLinksAsync(Guid workspaceId, ClaimsPrincipal user,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    Task<ManagedLink> GetWorkspaceManagedLinkAsync(Guid workspaceId, string shortCode, ClaimsPrincipal user,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    Task<ManagedLink> GetWorkspaceManagedAnalyticsAsync(Guid workspaceId, string shortCode, ClaimsPrincipal user,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException();
     Uri PublicUrl(string shortCode);
 }
 
@@ -49,6 +60,42 @@ public sealed class ShortenerApiClient : IShortenerApiClient
     }
 
     public Uri PublicUrl(string shortCode) => new(BaseUri, "r/" + Uri.EscapeDataString(shortCode));
+
+    public async Task<IReadOnlyList<WorkspaceSummary>> GetWorkspacesAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        using var message = await AuthorizedRequestAsync(HttpMethod.Get, "api/me/workspaces", user, cancellationToken);
+        return await SendAsync<WorkspaceSummary[]>(message, "load workspaces", cancellationToken);
+    }
+
+    public async Task<LinkResult> CreateWorkspaceManagedAsync(Guid workspaceId, CreateLinkRequest request,
+        ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        using var message = await AuthorizedRequestAsync(HttpMethod.Post, WorkspacePath(workspaceId), user, cancellationToken);
+        message.Content = JsonContent.Create(request);
+        var (link, status) = await SendWithStatusAsync<CreatedLink>(message, "create workspace link", cancellationToken);
+        return new(link, PublicUrl(link.ShortCode), AlreadyExists: status == HttpStatusCode.OK);
+    }
+
+    public async Task<IReadOnlyList<ManagedLink>> GetWorkspaceManagedLinksAsync(Guid workspaceId,
+        ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        using var message = await AuthorizedRequestAsync(HttpMethod.Get, WorkspacePath(workspaceId) + "/analytics", user, cancellationToken);
+        return await SendAsync<ManagedLink[]>(message, "load workspace links", cancellationToken);
+    }
+
+    public async Task<ManagedLink> GetWorkspaceManagedLinkAsync(Guid workspaceId, string shortCode,
+        ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        using var message = await AuthorizedRequestAsync(HttpMethod.Get, WorkspacePath(workspaceId) + "/" + Uri.EscapeDataString(shortCode), user, cancellationToken);
+        return await SendAsync<ManagedLink>(message, "load workspace link", cancellationToken);
+    }
+
+    public async Task<ManagedLink> GetWorkspaceManagedAnalyticsAsync(Guid workspaceId, string shortCode,
+        ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        using var message = await AuthorizedRequestAsync(HttpMethod.Get, WorkspacePath(workspaceId) + "/" + Uri.EscapeDataString(shortCode) + "/analytics", user, cancellationToken);
+        return await SendAsync<ManagedLink>(message, "load workspace analytics", cancellationToken);
+    }
 
     public async Task<LinkResult> CreateGuestAsync(CreateLinkRequest request, CancellationToken cancellationToken = default)
     {
@@ -87,6 +134,7 @@ public sealed class ShortenerApiClient : IShortenerApiClient
     private Uri BaseUri => _baseUri ?? throw new ShortenerApiException("The shortener API address is not configured.");
 
     private static string ManagedPath(string shortCode) => "api/urls/managed/" + Uri.EscapeDataString(shortCode);
+    private static string WorkspacePath(Guid workspaceId) => "api/workspaces/" + workspaceId + "/urls/managed";
 
     private async Task<HttpRequestMessage> AuthorizedRequestAsync(HttpMethod method, string path,
         ClaimsPrincipal user, CancellationToken cancellationToken)

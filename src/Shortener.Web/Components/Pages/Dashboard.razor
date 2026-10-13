@@ -21,7 +21,7 @@
     </div>
 }
 <h1>Managed links</h1>
-<p class="lead">Create persistent links for your signed-in organization and review redirect counts.</p>
+<p class="lead">Create persistent links for your @(Identity.Customer ? "workspace" : "signed-in organization") and review redirect counts.</p>
 
 @if (!Identity.Configured)
 {
@@ -29,6 +29,16 @@
 }
 else
 {
+    @if (Identity.Customer && workspaces is not null)
+    {
+        <label for="workspace-select">Workspace</label>
+        <select id="workspace-select" class="form-select" value="@workspaceId" @onchange="SelectWorkspaceAsync">
+            @foreach (var workspace in workspaces)
+            {
+                <option value="@workspace.Id">@workspace.Name</option>
+            }
+        </select>
+    }
     <section>
         <h2>Create a managed link</h2>
         <EditForm Model="form" OnSubmit="CreateAsync" FormName="managed-link" class="link-form">
@@ -97,6 +107,8 @@ else
     [CascadingParameter] private Task<AuthenticationState> AuthenticationState { get; set; } = default!;
     private readonly LinkForm form = new();
     private IReadOnlyList<ManagedLink>? links;
+    private IReadOnlyList<WorkspaceSummary>? workspaces;
+    private Guid? workspaceId;
     private ManagedLink? selected;
     private ToastNotice? notice;
     private bool noticeDismissing;
@@ -148,7 +160,7 @@ else
         if (busy) return;
         try
         {
-            var latest = await Api.GetManagedLinksAsync((await AuthenticationState).User, liveCancellation.Token);
+            var latest = await GetLinksAsync((await AuthenticationState).User, liveCancellation.Token);
             var changed = links is null || !latest.SequenceEqual(links);
             links = latest;
             if (selected is not null)
@@ -191,7 +203,17 @@ else
     {
         busy = true;
         error = null;
-        try { links = await Api.GetManagedLinksAsync((await AuthenticationState).User); }
+        try
+        {
+            var user = (await AuthenticationState).User;
+            if (Identity.Customer)
+            {
+                workspaces = await Api.GetWorkspacesAsync(user);
+                workspaceId = workspaces.FirstOrDefault(x => x.Kind == 0)?.Id ?? workspaces.FirstOrDefault()?.Id;
+                if (workspaceId is null) throw new ShortenerApiException("No workspace is available for this account.");
+            }
+            links = await GetLinksAsync(user);
+        }
         catch (Exception ex) { HandleFailure(ex, "load managed links"); }
         finally { busy = false; }
     }
@@ -203,8 +225,11 @@ else
         try
         {
             var user = (await AuthenticationState).User;
-            var result = await Api.CreateManagedAsync(new(form.OriginalUrl, string.IsNullOrWhiteSpace(form.ShortCode) ? null : form.ShortCode.Trim()), user);
-            links = await Api.GetManagedLinksAsync(user);
+            var request = new CreateLinkRequest(form.OriginalUrl, string.IsNullOrWhiteSpace(form.ShortCode) ? null : form.ShortCode.Trim());
+            var result = Identity.Customer
+                ? await Api.CreateWorkspaceManagedAsync(workspaceId!.Value, request, user)
+                : await Api.CreateManagedAsync(request, user);
+            links = await GetLinksAsync(user);
             selected = links.FirstOrDefault(link => link.ShortCode == result.Link.ShortCode);
             ShowNotice(result.AlreadyExists ? "Link already exists" : "Link created",
                 result.AlreadyExists ? "You already have short link " : "Short link ",
@@ -224,10 +249,40 @@ else
         try
         {
             var user = (await AuthenticationState).User;
-            await Api.GetManagedLinkAsync(shortCode, user);
-            selected = await Api.GetManagedAnalyticsAsync(shortCode, user);
+            if (Identity.Customer)
+            {
+                await Api.GetWorkspaceManagedLinkAsync(workspaceId!.Value, shortCode, user);
+                selected = await Api.GetWorkspaceManagedAnalyticsAsync(workspaceId.Value, shortCode, user);
+            }
+            else
+            {
+                await Api.GetManagedLinkAsync(shortCode, user);
+                selected = await Api.GetManagedAnalyticsAsync(shortCode, user);
+            }
         }
         catch (Exception ex) { HandleFailure(ex, "load link analytics"); }
+        finally { busy = false; }
+    }
+
+    private Task<IReadOnlyList<ManagedLink>> GetLinksAsync(System.Security.Claims.ClaimsPrincipal user,
+        CancellationToken cancellationToken = default) => Identity.Customer
+            ? Api.GetWorkspaceManagedLinksAsync(workspaceId!.Value, user, cancellationToken)
+            : Api.GetManagedLinksAsync(user, cancellationToken);
+
+    private async Task SelectWorkspaceAsync(ChangeEventArgs args)
+    {
+        if (!Guid.TryParse(args.Value?.ToString(), out var selectedId) ||
+            workspaces?.Any(x => x.Id == selectedId) != true) return;
+        workspaceId = selectedId;
+        selected = null;
+        await LoadLinksAsync();
+    }
+
+    private async Task LoadLinksAsync()
+    {
+        busy = true;
+        try { links = await GetLinksAsync((await AuthenticationState).User); }
+        catch (Exception ex) { HandleFailure(ex, "load workspace links"); }
         finally { busy = false; }
     }
 

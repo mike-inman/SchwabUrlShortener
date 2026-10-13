@@ -7,13 +7,19 @@ using Shortener.Web.Components;
 using Shortener.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+var identityMode = builder.Configuration["Identity:Mode"];
+if (!string.IsNullOrWhiteSpace(identityMode) &&
+    !string.Equals(identityMode, "Customer", StringComparison.OrdinalIgnoreCase) &&
+    !string.Equals(identityMode, "Workforce", StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException("Identity:Mode must be Customer or Workforce.");
+var customerIdentity = string.Equals(identityMode, "Customer", StringComparison.OrdinalIgnoreCase);
 
 var entraConfigured = !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:ClientId"])
     && !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:TenantId"])
-    && !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:Instance"])
+    && !string.IsNullOrWhiteSpace(builder.Configuration[customerIdentity ? "AzureAd:Authority" : "AzureAd:Instance"])
     && !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:ClientSecret"])
     && !string.IsNullOrWhiteSpace(builder.Configuration["ShortenerApi:Scope"]);
-builder.Services.AddSingleton(new IdentityAvailability(entraConfigured));
+builder.Services.AddSingleton(new IdentityAvailability(entraConfigured, customerIdentity));
 if (entraConfigured)
 {
     builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd")

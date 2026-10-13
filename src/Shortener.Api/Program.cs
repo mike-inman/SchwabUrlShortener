@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Identity.Web;
+using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using Shortener.Application;
 using Shortener.Application.Interfaces;
@@ -26,6 +27,7 @@ builder.Services.AddDbContextFactory<ShortenerDbContext>((sp, options) =>
     options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
 builder.Services.AddSingleton<IUrlShortenerRepository, PostgresUrlShortenerRepository>();
 builder.Services.AddSingleton<IWorkspaceLinkAccess, PostgresWorkspaceLinkAccess>();
+builder.Services.AddSingleton<PostgresCustomerWorkspaces>();
 builder.Services.AddSingleton<IRedirectCache>(sp => new RedisRedirectCache(
     sp.GetRequiredService<IConfiguration>().GetConnectionString("Redis"),
     sp.GetRequiredService<IConfiguration>()["RedirectCache:Namespace"]));
@@ -33,15 +35,68 @@ builder.Services.AddSingleton<IUrlShortenerService, UrlShortenerService>();
 builder.Services.AddHealthChecks()
     .AddCheck<PostgresHealthCheck>("postgres", tags: ["ready"])
     .AddCheck<RedisHealthCheck>("redis", tags: ["ready"]);
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddMicrosoftIdentityWebApi(builder.Configuration, "AzureAd");
-builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options => options.MapInboundClaims = false);
+var identityMode = builder.Configuration["Identity:Mode"];
+if (!string.IsNullOrWhiteSpace(identityMode) &&
+    !string.Equals(identityMode, "Customer", StringComparison.OrdinalIgnoreCase) &&
+    !string.Equals(identityMode, "Workforce", StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException("Identity:Mode must be Customer or Workforce.");
+var customerIdentity = string.Equals(identityMode, "Customer", StringComparison.OrdinalIgnoreCase);
+if (customerIdentity)
+{
+    var instance = builder.Configuration["AzureAd:Instance"];
+    var tenantId = builder.Configuration["AzureAd:TenantId"];
+    var clientId = builder.Configuration["AzureAd:ClientId"];
+    if (!Uri.TryCreate(instance, UriKind.Absolute, out var authorityHost) || authorityHost.Scheme != "https" ||
+        !authorityHost.Host.EndsWith(".ciamlogin.com", StringComparison.OrdinalIgnoreCase) ||
+        !Guid.TryParse(tenantId, out _) || !Guid.TryParse(clientId, out _))
+        throw new InvalidOperationException("Customer API identity requires a ciamlogin.com instance, tenant ID, and API client ID.");
+    var authority = instance!.TrimEnd('/') + "/" + tenantId + "/v2.0";
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+    {
+        options.Authority = authority;
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidAudiences = [clientId, "api://" + clientId],
+            ValidateLifetime = true,
+            RequireExpirationTime = true,
+            RequireSignedTokens = true,
+            ValidateIssuerSigningKey = true,
+            NameClaimType = "sub"
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = context =>
+            {
+                var claims = context.Principal?.Claims ?? [];
+                if (claims.Count(x => x.Type == "iss") != 1 || claims.Count(x => x.Type == "sub") != 1 ||
+                    claims.SingleOrDefault(x => x.Type == "sub")?.Value is not { Length: > 0 } subject ||
+                    subject.Length > 500 || claims.SingleOrDefault(x => x.Type == "ver")?.Value != "2.0" ||
+                    !claims.Any(x => x.Type == "scp" && x.Value.Split(' ').Contains("access_as_user")))
+                    context.Fail("Customer access token claims are invalid.");
+                return Task.CompletedTask;
+            }
+        };
+    });
+}
+else
+{
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddMicrosoftIdentityWebApi(builder.Configuration, "AzureAd");
+    builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options => options.MapInboundClaims = false);
+}
 builder.Services.AddAuthorization(options =>
 {
-    options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
-        .RequireAuthenticatedUser()
-        .RequireScope("access_as_user")
-        .Build();
+    var policy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser();
+    if (customerIdentity)
+        policy.RequireAssertion(context => context.User.FindAll("scp")
+            .Any(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("access_as_user")));
+    else
+        policy.RequireScope("access_as_user");
+    options.DefaultPolicy = policy.Build();
 });
 
 var app = builder.Build();
@@ -73,6 +128,13 @@ app.UseAuthorization();
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false }).AllowAnonymous();
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") }).AllowAnonymous();
 
+app.MapGet("/api/me/workspaces", async (ClaimsPrincipal principal, HttpContext context,
+    PostgresCustomerWorkspaces workspaces, CancellationToken cancellationToken) =>
+{
+    if (!TryGetValidatedIdentity(principal, context, out var issuer, out var subject)) return Results.Forbid();
+    return Results.Ok(await workspaces.GetOrCreateAsync(issuer, subject, cancellationToken));
+}).WithName("GetMyWorkspaces").RequireAuthorization();
+
 app.MapPost("/api/urls/guest", async (CreateUrlRequest request, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
     try
@@ -86,6 +148,7 @@ app.MapPost("/api/urls/guest", async (CreateUrlRequest request, IUrlShortenerSer
 
 app.MapPost("/api/urls/managed", async (CreateUrlRequest request, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
+    if (customerIdentity) return Results.NotFound();
     if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
     try
     {
@@ -106,6 +169,7 @@ app.MapGet("/r/{shortCode}", async (string shortCode, IUrlShortenerService servi
 
 app.MapGet("/api/urls/managed/{shortCode}", async (string shortCode, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
+    if (customerIdentity) return Results.NotFound();
     if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
     var mapping = await service.GetManagedAsync(tenantId, shortCode, cancellationToken);
     return mapping is null ? Results.NotFound(new ApiError("Managed link not found.")) : Results.Ok(ToManagedResponse(mapping));
@@ -113,6 +177,7 @@ app.MapGet("/api/urls/managed/{shortCode}", async (string shortCode, ClaimsPrinc
 
 app.MapGet("/api/urls/managed/{shortCode}/analytics", async (string shortCode, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
+    if (customerIdentity) return Results.NotFound();
     if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
     var mapping = await service.GetManagedAsync(tenantId, shortCode, cancellationToken);
     return mapping is null ? Results.NotFound(new ApiError("Managed link not found.")) : Results.Ok(ToManagedResponse(mapping));
@@ -120,6 +185,7 @@ app.MapGet("/api/urls/managed/{shortCode}/analytics", async (string shortCode, C
 
 app.MapGet("/api/urls/managed/analytics", async (ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
+    if (customerIdentity) return Results.NotFound();
     if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
     var mappings = await service.GetManagedAnalyticsAsync(tenantId, cancellationToken);
     return Results.Ok(mappings.Select(ToManagedResponse).ToArray());
@@ -181,8 +247,10 @@ static bool TryGetTenant(ClaimsPrincipal principal, HttpContext context, out Gui
 
 static bool TryGetValidatedIdentity(ClaimsPrincipal principal, HttpContext context, out string issuer, out string subject)
 {
-    issuer = principal.FindFirstValue("iss") ?? string.Empty;
-    subject = principal.FindFirstValue("sub") ?? string.Empty;
+    var issuers = principal.FindAll("iss").ToArray();
+    var subjects = principal.FindAll("sub").ToArray();
+    issuer = issuers.Length == 1 ? issuers[0].Value : string.Empty;
+    subject = subjects.Length == 1 ? subjects[0].Value : string.Empty;
     if (principal.Identity?.IsAuthenticated == true &&
         Uri.TryCreate(issuer, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps &&
         !string.IsNullOrWhiteSpace(subject) && subject.Length <= 500 && issuer.Length <= 500)

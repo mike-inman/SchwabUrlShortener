@@ -66,6 +66,32 @@ public sealed class ApiClientTests
         Assert.Equal("abc", result.Link.ShortCode);
     }
 
+    [Fact]
+    public async Task Customer_calls_use_workspace_routes_and_bearer_token()
+    {
+        var workspaceId = Guid.NewGuid();
+        var paths = new List<string>();
+        var client = MakeClient(request =>
+        {
+            paths.Add(request.RequestUri!.AbsolutePath);
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            return request.RequestUri.AbsolutePath == "/api/me/workspaces"
+                ? Json(HttpStatusCode.OK, $"[{{\"id\":\"{workspaceId}\",\"name\":\"Personal\",\"kind\":0}}]")
+                : request.Method == HttpMethod.Post ? Json(HttpStatusCode.Created, CreatedJson)
+                : request.RequestUri.AbsolutePath.EndsWith("/analytics") && request.RequestUri.AbsolutePath.EndsWith("managed/analytics")
+                    ? Json(HttpStatusCode.OK, "[" + ManagedJson + "]")
+                    : Json(HttpStatusCode.OK, ManagedJson);
+        });
+        Assert.Equal(workspaceId, Assert.Single(await client.GetWorkspacesAsync(User)).Id);
+        await client.CreateWorkspaceManagedAsync(workspaceId, new("https://example.com", "abc"), User);
+        Assert.Single(await client.GetWorkspaceManagedLinksAsync(workspaceId, User));
+        await client.GetWorkspaceManagedLinkAsync(workspaceId, "abc", User);
+        await client.GetWorkspaceManagedAnalyticsAsync(workspaceId, "abc", User);
+        Assert.Equal(5, paths.Count);
+        Assert.All(paths.Skip(1), path => Assert.StartsWith($"/api/workspaces/{workspaceId}/urls/managed", path));
+        Assert.DoesNotContain(paths, path => path.StartsWith("/api/urls/managed", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Conflict, "already in use")]
     [InlineData(HttpStatusCode.Unauthorized, "access was denied")]
