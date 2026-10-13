@@ -1,30 +1,16 @@
-﻿<div class="top-row ps-3 navbar navbar-dark">
-    <div class="container-fluid">
-        <a class="navbar-brand" href="">Shortener.Web</a>
-    </div>
-</div>
+@inject IdentityAvailability Identity
 
-<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
-
-<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
-    <nav class="nav flex-column">
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Home
-            </NavLink>
-        </div>
-
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="counter">
-                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> Counter
-            </NavLink>
-        </div>
-
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="weather">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Weather
-            </NavLink>
-        </div>
-    </nav>
-</div>
-
+<nav aria-label="Main navigation" class="site-nav">
+    <a class="brand" href="/">Shortener</a>
+    <NavLink href="/" Match="NavLinkMatch.All">Guest link</NavLink>
+    @if (Identity.Configured)
+    {
+        <AuthorizeView>
+            <Authorized>
+                <NavLink href="/dashboard">Managed links</NavLink>
+                <form method="post" action="/account/signout"><AntiforgeryToken /><button class="nav-button" type="submit">Sign out</button></form>
+            </Authorized>
+            <NotAuthorized><a href="/account/signin">Sign in</a></NotAuthorized>
+        </AuthorizeView>
+    }
+</nav>

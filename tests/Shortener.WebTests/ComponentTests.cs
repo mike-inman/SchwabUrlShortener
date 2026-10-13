@@ -1,0 +1,110 @@
+using System.Security.Claims;
+using Bunit;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Shortener.Web.Components.Pages;
+using Shortener.Web.Services;
+using Xunit;
+
+namespace Shortener.WebTests;
+
+public sealed class ComponentTests : BunitContext
+{
+    private static readonly CreatedLink Created = new("abc", "https://example.com", "/r/abc",
+        new DateTimeOffset(2026, 10, 12, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero));
+    private static readonly ManagedLink Managed = new("abc", "https://example.com", Created.CreatedAtUtc, null, 4);
+
+    [Fact]
+    public async Task Guest_form_shows_loading_then_expiry_without_management_controls()
+    {
+        var pending = new TaskCompletionSource<LinkResult>();
+        var api = Setup();
+        api.Guest = _ => pending.Task;
+        var view = Render<Home>();
+        Assert.Contains("seven days", view.Markup);
+        view.Find("#guest-url").Change("https://example.com");
+        var submit = view.Find("form").SubmitAsync();
+        Assert.Contains("Creating your link", view.Markup);
+        pending.SetResult(new(Created, new Uri("https://api.example.test/r/abc")));
+        await submit;
+        view.WaitForAssertion(() => Assert.Contains("Guest link ready", view.Markup));
+        Assert.Contains("Expires:", view.Markup);
+        Assert.DoesNotContain("Details", view.Markup);
+        Assert.DoesNotContain("Redirects:", view.Markup);
+    }
+
+    [Fact]
+    public async Task Guest_form_shows_safe_api_failure()
+    {
+        var api = Setup();
+        api.Guest = _ => throw new ShortenerApiException("That custom code is already in use. Choose another.");
+        var view = Render<Home>();
+        view.Find("#guest-url").Change("https://example.com");
+        await view.Find("form").SubmitAsync();
+        view.WaitForAssertion(() => Assert.Contains("already in use", view.Markup));
+        Assert.DoesNotContain("Guest link ready", view.Markup);
+    }
+
+    [Fact]
+    public async Task Dashboard_loads_creates_and_displays_analytics_for_signed_in_user()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        api.ManagedCreate = _ => Task.FromResult(new LinkResult(Created, new Uri("https://api.example.test/r/abc")));
+        api.Analytics = _ => Task.FromResult(Managed);
+        var view = Render<Dashboard>();
+        view.WaitForAssertion(() => Assert.Contains("Your links", view.Markup));
+        Assert.Contains("abc", view.Markup);
+        view.Find("#managed-url").Change("https://example.com");
+        await view.Find("form").SubmitAsync();
+        view.WaitForAssertion(() => Assert.Contains("Created:", view.Markup));
+        await view.Find("button.btn-sm").ClickAsync();
+        view.WaitForAssertion(() => Assert.Contains("Redirects: 4", view.Markup));
+        Assert.True(api.AuthenticatedCalls >= 4);
+    }
+
+    [Fact]
+    public void Dashboard_shows_loading_then_error()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var pending = new TaskCompletionSource<IReadOnlyList<ManagedLink>>();
+        var api = Setup();
+        api.List = _ => pending.Task;
+        var view = Render<Dashboard>();
+        Assert.Contains("Loading managed links", view.Markup);
+        pending.SetException(new ShortenerApiException("The shortener API is unavailable. Try again later."));
+        view.WaitForAssertion(() => Assert.Contains("API is unavailable", view.Markup));
+    }
+
+    private FakeApi Setup()
+    {
+        var api = new FakeApi();
+        Services.AddSingleton<IShortenerApiClient>(api);
+        Services.AddSingleton(new IdentityAvailability(true));
+        Services.AddSingleton(NullLogger<Home>.Instance);
+        Services.AddSingleton(NullLogger<Dashboard>.Instance);
+        return api;
+    }
+
+    private sealed class FakeApi : IShortenerApiClient
+    {
+        public Func<CreateLinkRequest, Task<LinkResult>> Guest { get; set; } = _ => throw new NotImplementedException();
+        public Func<CreateLinkRequest, Task<LinkResult>> ManagedCreate { get; set; } = _ => throw new NotImplementedException();
+        public Func<ClaimsPrincipal, Task<IReadOnlyList<ManagedLink>>> List { get; set; } = _ => throw new NotImplementedException();
+        public Func<string, Task<ManagedLink>> Analytics { get; set; } = _ => throw new NotImplementedException();
+        public int AuthenticatedCalls { get; private set; }
+        public Task<LinkResult> CreateGuestAsync(CreateLinkRequest request, CancellationToken cancellationToken = default) => Guest(request);
+        public Task<LinkResult> CreateManagedAsync(CreateLinkRequest request, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        { Assert.True(user.Identity?.IsAuthenticated); AuthenticatedCalls++; return ManagedCreate(request); }
+        public Task<IReadOnlyList<ManagedLink>> GetManagedLinksAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        { Assert.True(user.Identity?.IsAuthenticated); AuthenticatedCalls++; return List(user); }
+        public Task<ManagedLink> GetManagedLinkAsync(string shortCode, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        { Assert.True(user.Identity?.IsAuthenticated); AuthenticatedCalls++; return Task.FromResult(Managed); }
+        public Task<ManagedLink> GetManagedAnalyticsAsync(string shortCode, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        { Assert.True(user.Identity?.IsAuthenticated); AuthenticatedCalls++; return Analytics(shortCode); }
+        public Uri PublicUrl(string shortCode) => new("https://api.example.test/r/" + shortCode);
+    }
+}

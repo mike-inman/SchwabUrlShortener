@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Shortener.Application\Shortener.Application.csproj" />
+    <PackageReference Include="Microsoft.Identity.Web" Version="4.16.0" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -1,0 +1,140 @@
+@page "/dashboard"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject IShortenerApiClient Api
+@inject ILogger<Dashboard> Logger
+@inject IdentityAvailability Identity
+
+<PageTitle>Managed links</PageTitle>
+<h1>Managed links</h1>
+<p class="lead">Create persistent links for your signed-in organization and review redirect counts.</p>
+
+@if (!Identity.Configured)
+{
+    <p class="alert alert-warning">Managed sign-in is not configured for this site.</p>
+}
+else
+{
+    <section>
+        <h2>Create a managed link</h2>
+        <EditForm Model="form" OnSubmit="CreateAsync" FormName="managed-link" class="link-form">
+            <label for="managed-url">Destination URL</label>
+            <input id="managed-url" class="form-control" type="url" required placeholder="https://example.com/page" @bind="form.OriginalUrl" />
+            <label for="managed-code">Custom short code <span class="muted">(optional)</span></label>
+            <input id="managed-code" class="form-control" maxlength="64" @bind="form.ShortCode" />
+            <button class="btn btn-primary" type="submit" disabled="@busy">@(busy ? "Creating…" : "Create managed link")</button>
+        </EditForm>
+        @if (created is not null)
+        {
+            <p class="alert alert-success" role="status">Created: <a href="@created.PublicUrl" target="_blank" rel="noopener noreferrer">@created.PublicUrl</a></p>
+        }
+    </section>
+
+    <section>
+        <div class="section-heading"><h2>Your links</h2><button class="btn btn-outline-secondary" disabled="@busy" @onclick="LoadAsync">Refresh</button></div>
+        @if (busy) { <p role="status">Loading managed links…</p> }
+        @if (error is not null) { <p class="alert alert-danger" role="alert">@error</p> }
+        @if (!busy && links is not null && links.Count == 0) { <p>No managed links yet.</p> }
+        @if (links is not null && links.Count > 0)
+        {
+            <div class="table-responsive">
+                <table class="table">
+                    <thead><tr><th>Short link</th><th>Destination</th><th>Created</th><th>Redirects</th><th>Last accessed</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var link in links)
+                        {
+                            <tr>
+                                <td><a href="@Api.PublicUrl(link.ShortCode)" target="_blank" rel="noopener noreferrer">@link.ShortCode</a></td>
+                                <td class="destination">@link.OriginalUrl</td>
+                                <td>@link.CreatedAtUtc.ToLocalTime().ToString("g")</td>
+                                <td>@link.HitCount</td>
+                                <td>@(link.LastAccessedAtUtc?.ToLocalTime().ToString("g") ?? "Never")</td>
+                                <td><button class="btn btn-sm btn-outline-primary" disabled="@busy" @onclick="() => ShowDetailsAsync(link.ShortCode)">Details</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+    @if (selected is not null)
+    {
+        <section class="result">
+            <h2>Link details: @selected.ShortCode</h2>
+            <p>Destination: @selected.OriginalUrl</p>
+            <p>Redirects: @selected.HitCount</p>
+            <p>Last accessed: @(selected.LastAccessedAtUtc?.ToLocalTime().ToString("f") ?? "Never")</p>
+        </section>
+    }
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthenticationState { get; set; } = default!;
+    private readonly LinkForm form = new();
+    private IReadOnlyList<ManagedLink>? links;
+    private ManagedLink? selected;
+    private LinkResult? created;
+    private bool busy;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Identity.Configured) await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        busy = true;
+        error = null;
+        try { links = await Api.GetManagedLinksAsync((await AuthenticationState).User); }
+        catch (Exception ex) { HandleFailure(ex, "load managed links"); }
+        finally { busy = false; }
+    }
+
+    private async Task CreateAsync()
+    {
+        busy = true;
+        error = null;
+        created = null;
+        try
+        {
+            var user = (await AuthenticationState).User;
+            created = await Api.CreateManagedAsync(new(form.OriginalUrl, string.IsNullOrWhiteSpace(form.ShortCode) ? null : form.ShortCode.Trim()), user);
+            links = await Api.GetManagedLinksAsync(user);
+        }
+        catch (Exception ex) { HandleFailure(ex, "create managed link"); }
+        finally { busy = false; }
+    }
+
+    private async Task ShowDetailsAsync(string shortCode)
+    {
+        busy = true;
+        error = null;
+        selected = null;
+        try
+        {
+            var user = (await AuthenticationState).User;
+            await Api.GetManagedLinkAsync(shortCode, user);
+            selected = await Api.GetManagedAnalyticsAsync(shortCode, user);
+        }
+        catch (Exception ex) { HandleFailure(ex, "load link analytics"); }
+        finally { busy = false; }
+    }
+
+    private void HandleFailure(Exception ex, string operation)
+    {
+        if (ex is ShortenerApiException or ManagedAccessUnavailableException)
+            error = ex.Message;
+        else
+        {
+            Logger.LogError(ex, "Managed UI operation failed: {Operation}", operation);
+            error = "Unable to complete this operation. Try again later.";
+        }
+    }
+
+    private sealed class LinkForm
+    {
+        public string OriginalUrl { get; set; } = "";
+        public string? ShortCode { get; set; }
+    }
+}
