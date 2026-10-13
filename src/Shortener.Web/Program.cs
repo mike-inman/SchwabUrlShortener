@@ -2,7 +2,6 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Antiforgery;
-using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
 using Shortener.Web.Components;
 using Shortener.Web.Services;
@@ -26,6 +25,8 @@ if (entraConfigured)
     builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd")
         .EnableTokenAcquisitionToCallDownstreamApi()
         .AddInMemoryTokenCaches();
+    builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme,
+        options => options.Scope.Add(builder.Configuration["ShortenerApi:Scope"]!));
     builder.Services.Configure<AuthenticationOptions>(options =>
         options.DefaultAuthenticateScheme = CookieAuthenticationDefaults.AuthenticationScheme);
     if (customerIdentity)
@@ -59,13 +60,6 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 var app = builder.Build();
-if (entraConfigured)
-{
-    // Microsoft.Identity.Web merges its event handlers into the resolved OIDC options.
-    var oidc = app.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
-        .Get(OpenIdConnectDefaults.AuthenticationScheme);
-    oidc.Scope.Add(builder.Configuration["ShortenerApi:Scope"]!);
-}
 if (!ShortenerApiAddress.TryResolve(app.Configuration, out _, out var apiAddressReason))
     app.Logger.LogWarning("Shortener API base address rejected. Reason={Reason}. Web readiness will fail.", apiAddressReason);
 

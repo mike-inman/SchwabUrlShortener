@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.Identity.Client;
 using Microsoft.Identity.Web;
 
 namespace Shortener.Web.Services;
@@ -23,8 +25,14 @@ public sealed class EntraApiTokenProvider(
 
         async Task<string> AcquireAsync()
         {
-            try { return await tokenAcquisition.GetAccessTokenForUserAsync([scope], user: user); }
+            try { return await tokenAcquisition.GetAccessTokenForUserAsync([scope], authenticationScheme: OpenIdConnectDefaults.AuthenticationScheme, user: user); }
             catch (MicrosoftIdentityWebChallengeUserException ex)
+            {
+                logger.LogInformation("Managed API access requires renewed sign-in. ExceptionType={ExceptionType}",
+                    ex.GetType().Name);
+                throw new ManagedReauthenticationRequiredException();
+            }
+            catch (MsalUiRequiredException ex)
             {
                 logger.LogInformation("Managed API access requires renewed sign-in. ExceptionType={ExceptionType}",
                     ex.GetType().Name);

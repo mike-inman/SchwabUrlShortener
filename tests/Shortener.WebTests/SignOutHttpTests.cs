@@ -34,6 +34,10 @@ public sealed class SignOutHttpTests
         Assert.Equal(CookieAuthenticationDefaults.AuthenticationScheme,
             authOptions.DefaultAuthenticateScheme ?? authOptions.DefaultScheme);
         Assert.True(factory.Services.GetRequiredService<Shortener.Web.Services.IdentityAvailability>().Customer, "Identity mode is not Customer");
+        var oidc = factory.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>().Get("OpenIdConnect");
+        Assert.Contains("api://test/access_as_user", oidc.Scope);
+        Assert.NotEqual(new OpenIdConnectEvents().OnAuthorizationCodeReceived.Method,
+            oidc.Events.OnAuthorizationCodeReceived.Method);
 
         using var login = await client.GetAsync("/__test/login");
         Assert.Equal(HttpStatusCode.OK, login.StatusCode);
@@ -66,6 +70,7 @@ public sealed class SignOutHttpTests
         signOutRequest.Headers.Add("Cookie", string.Join("; ", loginCookies.Concat(CookiePairs(home))));
         using var signOut = await client.SendAsync(signOutRequest);
         Assert.Equal(HttpStatusCode.Redirect, signOut.StatusCode);
+        Assert.Equal(1, factory.PriorSignOutCalls);
         Assert.Contains("logout_hint=opaque-test-hint", signOut.Headers.Location?.Query);
         Assert.Contains("signout-callback-oidc", signOut.Headers.Location?.Query);
         var expired = SetCookies(signOut).ToArray();
@@ -97,6 +102,8 @@ public sealed class SignOutHttpTests
 
     private sealed class SignOutFactory : WebApplicationFactory<SignedOut>
     {
+        public int PriorSignOutCalls { get; private set; }
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             foreach (var setting in new Dictionary<string, string>
@@ -112,6 +119,15 @@ public sealed class SignOutHttpTests
             builder.ConfigureTestServices(services =>
             {
                 services.AddTransient<IStartupFilter, TestSignInFilter>();
+                services.Configure<OpenIdConnectOptions>("OpenIdConnect", options =>
+                {
+                    var previous = options.Events.OnRedirectToIdentityProviderForSignOut;
+                    options.Events.OnRedirectToIdentityProviderForSignOut = async context =>
+                    {
+                        PriorSignOutCalls++;
+                        await previous(context);
+                    };
+                });
                 services.PostConfigure<OpenIdConnectOptions>("OpenIdConnect", options =>
                     options.ConfigurationManager = new StaticConfigurationManager<OpenIdConnectConfiguration>(
                         new OpenIdConnectConfiguration { EndSessionEndpoint = "https://idp.example.test/logout" }));
