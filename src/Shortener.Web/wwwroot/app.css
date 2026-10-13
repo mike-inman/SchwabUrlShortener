@@ -23,6 +23,7 @@ article > section { margin-top: 2.5rem; }
 .dashboard-toast { animation: toast-slide-in .24s ease-out; }
 .dashboard-toast.notice-success { border-left: 4px solid #198754; }
 .dashboard-toast.notice-info { border-left: 4px solid #0d6efd; }
+.dashboard-toast-code { color: #084298; background: #e8f2ff; border-radius: .25rem; padding: .1rem .3rem; }
 @keyframes toast-slide-in { from { opacity: 0; transform: translateY(-1rem); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .dashboard-toast { animation: none; } }
 .dashboard-toast.dismissing { animation: toast-slide-out .3s ease-in forwards; }

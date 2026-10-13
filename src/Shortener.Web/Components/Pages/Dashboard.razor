@@ -15,7 +15,7 @@
                 <strong class="me-auto">@notice.Title</strong>
                 <button type="button" class="btn-close" aria-label="Close notification" @onclick="DismissNotice"></button>
             </div>
-            <div class="toast-body">@notice.Message</div>
+            <div class="toast-body">@notice.MessagePrefix<strong class="dashboard-toast-code">“@notice.ShortCode”</strong>@notice.MessageSuffix</div>
         </div>
     </div>
 }
@@ -172,7 +172,9 @@ else
             links = await Api.GetManagedLinksAsync(user);
             selected = links.FirstOrDefault(link => link.ShortCode == result.Link.ShortCode);
             ShowNotice(result.AlreadyExists ? "Link already exists" : "Link created",
-                result.AlreadyExists ? $"You already have short link {result.Link.ShortCode}." : $"Short link {result.Link.ShortCode} is ready.",
+                result.AlreadyExists ? "You already have short link " : "Short link ",
+                result.Link.ShortCode,
+                result.AlreadyExists ? "." : " is ready.",
                 result.AlreadyExists ? "notice-info" : "notice-success");
         }
         catch (Exception ex) { HandleFailure(ex, "create managed link"); }
@@ -194,11 +196,11 @@ else
         finally { busy = false; }
     }
 
-    private void ShowNotice(string title, string message, string kind)
+    private void ShowNotice(string title, string messagePrefix, string shortCode, string messageSuffix, string kind)
     {
         noticeCancellation?.Cancel();
         noticeCancellation?.Dispose();
-        notice = new(title, message, kind);
+        notice = new(title, messagePrefix, shortCode, messageSuffix, kind);
         noticeDismissing = false;
         noticeCancellation = new CancellationTokenSource();
         _ = DismissAfterDelayAsync(notice, noticeCancellation.Token);
@@ -236,7 +238,7 @@ else
         notice = null;
     }
 
-    private sealed record ToastNotice(string Title, string Message, string Kind);
+    private sealed record ToastNotice(string Title, string MessagePrefix, string ShortCode, string MessageSuffix, string Kind);
 
     private void HandleFailure(Exception ex, string operation)
     {
