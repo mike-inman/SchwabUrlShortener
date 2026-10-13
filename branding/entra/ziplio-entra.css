@@ -1,0 +1,123 @@
+/* Ziplio custom CSS for Microsoft Entra External ID hosted pages
+   (sign-in, sign-up, one-time code, sign-out). Upload in
+   Company branding > Default sign-in > Layout > Custom CSS.
+
+   Rules followed:
+   - Only selectors from Microsoft's company-branding CSS reference.
+   - No layout or positioning properties that Microsoft is deprecating
+     (position, margin, transform, opacity, display, overflow, filter, ...).
+     Only color, background, border, radius, shadow, padding, and type.
+   - Values repeat branding/tokens.css because this file cannot import it.
+   - The card stays light: Microsoft's inner elements (account tiles,
+     dividers, helper text) assume a light card and have no selectors.
+   - Web fonts may not load here; every stack falls back to system faces.
+
+   Palette: Midnight #0B1426, Slate #182941, Mint #59E6CF, Amber #F2BC68,
+   Cloud #F4F8FF, Mint ink #0B7A69 (mint for text on light surfaces). */
+
+body {
+  background-color: #0B1426;
+  color: #0B1426;
+  font-family: "Instrument Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+a, a:link, .ext-link { color: #0B7A69; text-decoration: none; font-weight: 600; }
+a:hover, .ext-link:hover { color: #075E51; text-decoration: underline; }
+a:focus, a:focus:hover, .ext-link:focus { color: #075E51; outline: 2px solid #59E6CF; outline-offset: 2px; border-radius: 3px; }
+a:active { color: #054B41; }
+
+/* Header bar over the night background (tenant name / header logo). */
+.ext-header { background-color: transparent; }
+
+/* Center stage keeps the uploaded background image visible. */
+.ext-middle { background-color: transparent; }
+
+/* The card: Cloud surface, mint hairline, deep soft shadow. */
+.ext-sign-in-box {
+  background-color: #FFFFFF;
+  border: 1px solid rgba(89, 230, 207, .55);
+  border-radius: 20px;
+  box-shadow:
+    0 0 0 6px rgba(89, 230, 207, .07),
+    0 40px 90px -30px rgba(0, 0, 0, .85),
+    0 0 80px -20px rgba(89, 230, 207, .25);
+  padding: 44px 44px 36px;
+  color: #0B1426;
+}
+
+.ext-title {
+  font-family: "Bricolage Grotesque", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 30px;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: #0B1426;
+}
+.ext-subtitle { color: #44546B; font-size: 15px; line-height: 1.5; }
+
+/* Text boxes: soft wells with a mint focus ring. */
+.ext-input.ext-text-box {
+  background-color: #F4F8FF;
+  border: 1px solid #C9D5E6;
+  border-radius: 10px;
+  color: #0B1426;
+  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 15px;
+  padding: 12px 14px;
+}
+.ext-input.ext-text-box:hover { border-color: #93A6C1; }
+.ext-input.ext-text-box:focus,
+.ext-input.ext-text-box:focus:hover {
+  background-color: #FFFFFF;
+  border-color: #0B7A69;
+  box-shadow: 0 0 0 4px rgba(89, 230, 207, .30);
+}
+.ext-input.ext-text-box.ext-has-error { border-color: #C2364A; box-shadow: 0 0 0 4px rgba(194, 54, 74, .12); }
+.ext-error { color: #B42338; font-weight: 600; }
+
+/* Primary action: Mint with Midnight text, glow on hover. */
+.ext-button.ext-primary {
+  background-color: #59E6CF;
+  border: 1px solid #59E6CF;
+  border-radius: 10px;
+  color: #0B1426;
+  font-weight: 700;
+  letter-spacing: .01em;
+  box-shadow: 0 8px 22px -12px rgba(11, 122, 105, .9);
+}
+.ext-button.ext-primary:hover { background-color: #86EEDD; border-color: #86EEDD; color: #0B1426; box-shadow: 0 12px 28px -10px rgba(89, 230, 207, .9); }
+.ext-button.ext-primary:focus,
+.ext-button.ext-primary:focus:hover { background-color: #86EEDD; color: #0B1426; outline: 2px solid #0B1426; outline-offset: 2px; }
+.ext-button.ext-primary:active { background-color: #3FD3BB; border-color: #3FD3BB; color: #0B1426; box-shadow: none; }
+
+/* Secondary action: quiet outline. */
+.ext-button.ext-secondary {
+  background-color: #FFFFFF;
+  border: 1px solid #C9D5E6;
+  border-radius: 10px;
+  color: #0B1426;
+  font-weight: 600;
+}
+.ext-button.ext-secondary:hover { background-color: #F4F8FF; border-color: #93A6C1; color: #0B1426; }
+.ext-button.ext-secondary:focus,
+.ext-button.ext-secondary:focus:hover { background-color: #F4F8FF; outline: 2px solid #0B7A69; outline-offset: 2px; color: #0B1426; }
+.ext-button.ext-secondary:active { background-color: #E6EEF9; color: #0B1426; }
+
+/* Sign-in options tile (Google and other providers appear here). */
+.ext-promoted-fed-cred-box {
+  background-color: #F4F8FF;
+  border: 1px solid #DCE5F2;
+  border-radius: 12px;
+  color: #0B1426;
+}
+.ext-promoted-fed-cred-box:hover { background-color: #EAF9F6; border-color: #59E6CF; }
+
+/* Custom message under the card content ("Sign-in page text"). */
+.ext-boilerplate-text { color: #5A6B84; font-size: 13px; line-height: 1.5; }
+
+/* Footer on the night ground. */
+.ext-footer { background-color: transparent; color: #9DB0CB; }
+.ext-footer-links { color: #9DB0CB; }
+.ext-footer-item, .ext-footer-item:link { color: #9DB0CB; font-weight: 500; font-size: 12px; }
+.ext-footer-item:hover { color: #F4F8FF; }
+.ext-debug-item { color: #9DB0CB; }

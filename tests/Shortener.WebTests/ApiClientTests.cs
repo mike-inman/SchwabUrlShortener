@@ -66,6 +66,32 @@ public sealed class ApiClientTests
         Assert.Equal("abc", result.Link.ShortCode);
     }
 
+    [Fact]
+    public async Task Customer_calls_use_workspace_routes_and_bearer_token()
+    {
+        var workspaceId = Guid.NewGuid();
+        var paths = new List<string>();
+        var client = MakeClient(request =>
+        {
+            paths.Add(request.RequestUri!.AbsolutePath);
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            return request.RequestUri.AbsolutePath == "/api/me/workspaces"
+                ? Json(HttpStatusCode.OK, $"[{{\"id\":\"{workspaceId}\",\"name\":\"Personal\",\"kind\":0}}]")
+                : request.Method == HttpMethod.Post ? Json(HttpStatusCode.Created, CreatedJson)
+                : request.RequestUri.AbsolutePath.EndsWith("/analytics") && request.RequestUri.AbsolutePath.EndsWith("managed/analytics")
+                    ? Json(HttpStatusCode.OK, "[" + ManagedJson + "]")
+                    : Json(HttpStatusCode.OK, ManagedJson);
+        });
+        Assert.Equal(workspaceId, Assert.Single(await client.GetWorkspacesAsync(User)).Id);
+        await client.CreateWorkspaceManagedAsync(workspaceId, new("https://example.com", "abc"), User);
+        Assert.Single(await client.GetWorkspaceManagedLinksAsync(workspaceId, User));
+        await client.GetWorkspaceManagedLinkAsync(workspaceId, "abc", User);
+        await client.GetWorkspaceManagedAnalyticsAsync(workspaceId, "abc", User);
+        Assert.Equal(5, paths.Count);
+        Assert.All(paths.Skip(1), path => Assert.StartsWith($"/api/workspaces/{workspaceId}/urls/managed", path));
+        Assert.DoesNotContain(paths, path => path.StartsWith("/api/urls/managed", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Conflict, "already in use")]
     [InlineData(HttpStatusCode.Unauthorized, "access was denied")]
@@ -101,7 +127,7 @@ public sealed class ApiClientTests
         {
             Assert.Equal("http://api:8080/api/urls/guest", request.RequestUri!.ToString());
             return Json(HttpStatusCode.Created, CreatedJson);
-        }, "http://api:8080/", allowInternalHttp: true, publicUrl: "http://localhost:8080/");
+        }, "http://api:8080/", allowedHosts: "api", publicUrl: "http://localhost:8080/");
         var result = await client.CreateGuestAsync(new("https://example.com", "abc"));
         Assert.Equal("http://localhost:8080/r/abc", result.PublicUrl.ToString());
         Assert.DoesNotContain("api:8080", result.PublicUrl.ToString());
@@ -115,13 +141,47 @@ public sealed class ApiClientTests
         Assert.Throws<ShortenerApiException>(() => MakeClient(_ => throw new Exception(), publicUrl: "https://go.example.test/other/").PublicUrl("abc"));
     }
 
-    private static ShortenerApiClient MakeClient(Func<HttpRequestMessage, HttpResponseMessage> respond,
-        string? baseUrl = "https://api.example.test/", bool allowInternalHttp = false, string? publicUrl = "https://go.example.test/")
+    [Theory]
+    [InlineData("http://api:8080", null, false)]
+    [InlineData("http://api:8080", "api", true)]
+    [InlineData("http://api:8080", "other, API ", true)]
+    [InlineData("http://unlisted:8080", "api", false)]
+    [InlineData("http://api.evil.test:8080", "api", false)]
+    [InlineData("https://api.example.test", null, true)]
+    [InlineData("http://localhost:8080", null, true)]
+    public void Api_address_validation_uses_exact_internal_host_allowance(
+        string baseUrl, string? allowedHosts, bool expected)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ShortenerApi:BaseUrl"] = baseUrl,
-            ["ShortenerApi:AllowHttpInternal"] = allowInternalHttp.ToString(),
+            ["ShortenerApi:AllowedInternalHttpHosts"] = allowedHosts
+        }).Build();
+        Assert.Equal(expected, ShortenerApiAddress.TryResolve(config, out var resolved, out _));
+        Assert.Equal(expected, resolved is not null);
+    }
+
+    [Fact]
+    public async Task Explicit_compose_host_allowance_enables_signed_in_workspace_calls()
+    {
+        var client = MakeClient(request =>
+        {
+            Assert.Equal("api", request.RequestUri?.Host);
+            Assert.Equal("/api/me/workspaces", request.RequestUri?.AbsolutePath);
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            return Json(HttpStatusCode.OK, "[]");
+        }, baseUrl: "http://api:8080", allowedHosts: "api");
+        Assert.Empty(await client.GetWorkspacesAsync(User));
+    }
+
+    private static ShortenerApiClient MakeClient(Func<HttpRequestMessage, HttpResponseMessage> respond,
+        string? baseUrl = "https://api.example.test/", string? allowedHosts = null,
+        string? publicUrl = "https://go.example.test/")
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ShortenerApi:BaseUrl"] = baseUrl,
+            ["ShortenerApi:AllowedInternalHttpHosts"] = allowedHosts,
             ["PublicLinks:BaseUrl"] = publicUrl
         }).Build();
         return new(new HttpClient(new DelegateHandler(respond)), new TestTokenProvider(), config, NullLogger<ShortenerApiClient>.Instance);

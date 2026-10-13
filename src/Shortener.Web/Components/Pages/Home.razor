@@ -3,8 +3,25 @@
 @inject IShortenerApiClient Api
 @inject ILogger<Home> Logger
 
-<PageTitle>Create a guest link</PageTitle>
-<h1>Create a guest link</h1>
+<PageTitle>@BrandText.TitleSuffix · @BrandText.Tagline</PageTitle>
+<section class="zl-hero" aria-labelledby="hero-title">
+    <p class="zl-eyebrow">@BrandText.Tagline</p>
+    <h1 id="hero-title">Every link deserves a <em>smarter destination.</em></h1>
+    <p class="lead">Create short links, track engagement, and manage your links from one dashboard.</p>
+    <div class="zl-demo zl-panel" aria-hidden="true">
+        <span class="zl-demo-label">Example</span>
+        <span class="zl-demo-long">https://www.example.com/campaigns/2026/autumn-launch?utm_source=newsletter&amp;utm_medium=email&amp;utm_campaign=launch</span>
+        <span class="zl-demo-route">
+            <svg viewBox="0 0 40 24"><path d="M3 4H33L9 20H37"/></svg>
+            <span class="zl-chip">ziplio.io/launch</span>
+        </span>
+    </div>
+    <ul class="zl-proof">
+        <li>Secure links</li><li>Live click counts</li><li>Built for reliability</li>
+    </ul>
+</section>
+<section aria-labelledby="guest-title">
+<h2 id="guest-title">Try a guest link</h2>
 <p class="lead">Share a short redirect link without signing in. It expires seven days after creation.</p>
 <p>Guest links are redirect only. They have no analytics or management dashboard.</p>
 
@@ -27,6 +44,7 @@
         <p class="muted">Save this link now. Guest links have no analytics or management controls.</p>
     </section>
 }
+</section>
 
 @code {
     private readonly LinkForm form = new();

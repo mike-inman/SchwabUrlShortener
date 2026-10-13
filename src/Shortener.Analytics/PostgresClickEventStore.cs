@@ -7,6 +7,56 @@ public sealed class InvalidClickEventException(string reason) : Exception(reason
 
 public sealed class PostgresClickEventStore(NpgsqlDataSource dataSource)
 {
+    public Task<bool> ApplyAsync(IManagedClickEvent click, CancellationToken cancellationToken = default) => click switch
+    {
+        ManagedClickEventV1 v1 => ApplyAsync(v1, cancellationToken),
+        ManagedClickEventV2 v2 => ApplyAsync(v2, cancellationToken),
+        _ => throw new InvalidClickEventException("unsupported_version")
+    };
+
+    public async Task<bool> ApplyAsync(ManagedClickEventV2 click, CancellationToken cancellationToken = default)
+    {
+        if (!click.IsValid()) throw new InvalidClickEventException("invalid_event");
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var verify = new NpgsqlCommand("""
+            SELECT 1 FROM url_mappings
+            WHERE id = @mapping_id AND owner_workspace_id = @workspace_id AND tenant_id IS NULL
+              AND mode = 1 AND short_code = @short_code
+            """, connection, transaction))
+        {
+            verify.Parameters.AddWithValue("mapping_id", click.MappingId);
+            verify.Parameters.AddWithValue("workspace_id", click.WorkspaceId);
+            verify.Parameters.AddWithValue("short_code", click.ShortCode);
+            if (await verify.ExecuteScalarAsync(cancellationToken) is null)
+                throw new InvalidClickEventException("mapping_workspace_mismatch");
+        }
+        await using var insert = new NpgsqlCommand("""
+            INSERT INTO processed_click_events (event_id, tenant_id, owner_workspace_id, event_version, mapping_id)
+            VALUES (@event_id, NULL, @workspace_id, 2, @mapping_id) ON CONFLICT (event_id) DO NOTHING
+            """, connection, transaction);
+        insert.Parameters.AddWithValue("event_id", click.EventId);
+        insert.Parameters.AddWithValue("workspace_id", click.WorkspaceId);
+        insert.Parameters.AddWithValue("mapping_id", click.MappingId);
+        if (await insert.ExecuteNonQueryAsync(cancellationToken) == 0)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return false;
+        }
+        await using var update = new NpgsqlCommand("""
+            UPDATE url_mappings SET hit_count = hit_count + 1,
+                last_accessed_at_utc = GREATEST(COALESCE(last_accessed_at_utc, @occurred_at), @occurred_at)
+            WHERE id = @mapping_id AND owner_workspace_id = @workspace_id AND tenant_id IS NULL AND mode = 1
+            """, connection, transaction);
+        update.Parameters.AddWithValue("mapping_id", click.MappingId);
+        update.Parameters.AddWithValue("workspace_id", click.WorkspaceId);
+        update.Parameters.AddWithValue("occurred_at", click.OccurredAtUtc);
+        if (await update.ExecuteNonQueryAsync(cancellationToken) != 1)
+            throw new InvalidClickEventException("mapping_disappeared");
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
     public async Task<bool> ApplyAsync(ManagedClickEventV1 click, CancellationToken cancellationToken = default)
     {
         if (!click.IsValid()) throw new InvalidClickEventException("invalid_event");

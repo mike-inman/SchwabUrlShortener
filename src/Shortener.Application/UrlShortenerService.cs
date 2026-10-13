@@ -14,15 +14,17 @@ public sealed class UrlShortenerService : IUrlShortenerService
     private const string AllowedChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     private readonly IUrlShortenerRepository _repository;
     private readonly IRedirectCache _cache;
+    private readonly IWorkspaceLinkAccess _workspaceAccess;
     private readonly TimeProvider _clock;
     private readonly ILogger<UrlShortenerService> _logger;
     private static readonly TimeSpan MaximumCacheTtl = TimeSpan.FromHours(1);
 
-    public UrlShortenerService(IUrlShortenerRepository repository, IRedirectCache cache,
+    public UrlShortenerService(IUrlShortenerRepository repository, IRedirectCache cache, IWorkspaceLinkAccess workspaceAccess,
         TimeProvider clock, ILogger<UrlShortenerService> logger)
     {
         _repository = repository;
         _cache = cache;
+        _workspaceAccess = workspaceAccess;
         _clock = clock;
         _logger = logger;
     }
@@ -37,6 +39,54 @@ public sealed class UrlShortenerService : IUrlShortenerService
     {
         if (tenantId == Guid.Empty) throw new ArgumentException("A valid tenant is required.", nameof(tenantId));
         return CreateAsync(tenantId, originalUrl, requestedShortCode, cancellationToken);
+    }
+
+    public async Task<ManagedCreateResult?> CreateWorkspaceManagedAsync(string issuer, string subject, Guid workspaceId,
+        string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
+    {
+        if (!await _workspaceAccess.CanManageLinksAsync(issuer, subject, workspaceId, cancellationToken)) return null;
+        var normalizedUrl = UrlValidation.NormalizeUrl(originalUrl);
+        if (!UrlValidation.IsValidAbsoluteUrl(normalizedUrl))
+            throw new ArgumentException("Original URL must be an absolute http or https URL.", nameof(originalUrl));
+        var custom = !string.IsNullOrWhiteSpace(requestedShortCode);
+        if (custom)
+        {
+            var existing = await _repository.GetWorkspaceManagedByShortCodeAsync(workspaceId, requestedShortCode!.Trim(), issuer, subject, cancellationToken);
+            if (existing is not null && existing.OriginalUrl == normalizedUrl) return new(existing, true);
+        }
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var code = custom ? requestedShortCode!.Trim() : GenerateShortCode();
+            var mapping = UrlMapping.CreateWorkspaceManaged(normalizedUrl, code, workspaceId, _clock.GetUtcNow());
+            if (await _repository.TryAddWorkspaceAsync(mapping, issuer, subject, cancellationToken))
+            {
+                await TryPopulateCacheAsync(RedirectTarget.FromMapping(mapping), cancellationToken);
+                return new(mapping, false);
+            }
+            if (custom)
+            {
+                if (!await _workspaceAccess.CanManageLinksAsync(issuer, subject, workspaceId, cancellationToken)) return null;
+                var existing = await _repository.GetWorkspaceManagedByShortCodeAsync(workspaceId, code, issuer, subject, cancellationToken);
+                if (existing is not null && existing.OriginalUrl == normalizedUrl) return new(existing, true);
+                throw new ShortCodeConflictException();
+            }
+        }
+        throw new InvalidOperationException("Could not allocate a unique short code. Try again.");
+    }
+
+    public async Task<UrlMapping?> GetWorkspaceManagedAsync(string issuer, string subject, Guid workspaceId,
+        string shortCode, CancellationToken cancellationToken = default)
+    {
+        if (!await _workspaceAccess.CanManageLinksAsync(issuer, subject, workspaceId, cancellationToken)) return null;
+        if (!UrlValidation.IsValidShortCode(shortCode)) return null;
+        return await _repository.GetWorkspaceManagedByShortCodeAsync(workspaceId, shortCode.Trim(), issuer, subject, cancellationToken);
+    }
+
+    public async Task<IReadOnlyCollection<UrlMapping>?> GetWorkspaceAnalyticsAsync(string issuer, string subject, Guid workspaceId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!await _workspaceAccess.CanManageLinksAsync(issuer, subject, workspaceId, cancellationToken)) return null;
+        return await _repository.GetManagedByWorkspaceAsync(workspaceId, issuer, subject, cancellationToken);
     }
 
     private async Task<ManagedCreateResult> CreateAsync(Guid? tenantId, string originalUrl, string? requestedShortCode, CancellationToken cancellationToken)
@@ -113,11 +163,12 @@ public sealed class UrlShortenerService : IUrlShortenerService
         if (target.IsExpired(_clock.GetUtcNow())) return null;
         if (target.Mode == LinkMode.Managed)
         {
-            var eventId = await _repository.CaptureManagedClickAsync(
-                target.Id, target.TenantId!.Value, _clock.GetUtcNow(), Activity.Current?.Id, cancellationToken);
+            var eventId = target.TenantId is { } tenant
+                ? await _repository.CaptureManagedClickAsync(target.Id, tenant, _clock.GetUtcNow(), Activity.Current?.Id, cancellationToken)
+                : await _repository.CaptureWorkspaceClickAsync(target.Id, target.OwnerWorkspaceId!.Value, _clock.GetUtcNow(), Activity.Current?.Id, cancellationToken);
             CapturedClicks.Add(1);
-            _logger.LogInformation("Managed click captured. EventId={EventId} TenantId={TenantId} MappingId={MappingId} CorrelationId={CorrelationId}",
-                eventId, target.TenantId, target.Id, Activity.Current?.Id);
+            _logger.LogInformation("Managed click captured. EventId={EventId} MappingId={MappingId} CorrelationId={CorrelationId}",
+                eventId, target.Id, Activity.Current?.Id);
         }
         return target;
     }

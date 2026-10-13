@@ -1,0 +1,36 @@
+/* Ziplio design tokens: the single source of truth for brand values.
+   The app links this file before app.css. The Entra hosted-page CSS cannot
+   import files, so branding/entra/ziplio-entra.css repeats these values;
+   update both when a value changes. Provisional brand, see
+   docs/2026-10-13-ziplio-branding-guidance.md. */
+:root {
+  /* Core palette (from the branding guidance) */
+  --zl-midnight: #0B1426;   /* page ground */
+  --zl-slate: #182941;      /* panels, forms */
+  --zl-mint: #59E6CF;       /* primary accent, actions, live state */
+  --zl-amber: #F2BC68;      /* destination dot, rare highlights */
+  --zl-cloud: #F4F8FF;      /* primary text on dark, light surfaces */
+
+  /* Derived */
+  --zl-ink: #070D1A;        /* deepest ground, input wells */
+  --zl-well: #0F1B32;       /* input background */
+  --zl-raised: #20355A;     /* hover surfaces */
+  --zl-line: #2A3F63;       /* hairlines on dark */
+  --zl-muted: #9DB0CB;      /* secondary text on dark (AA on midnight and slate) */
+  --zl-mint-hover: #86EEDD;
+  --zl-mint-ink: #0B7A69;   /* mint for text on light surfaces (AA on white) */
+  --zl-danger: #FF8A94;
+  --zl-mint-rgb: 89, 230, 207;
+  --zl-amber-rgb: 242, 188, 104;
+
+  /* Type: characterful display, quiet UI face, mono for links and counts */
+  --zl-font-display: "Bricolage Grotesque", "Instrument Sans", system-ui, sans-serif;
+  --zl-font-ui: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --zl-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Shape and motion */
+  --zl-radius-sm: .5rem;
+  --zl-radius: .875rem;
+  --zl-radius-lg: 1.25rem;
+  --zl-ease: cubic-bezier(.2, .8, .2, 1);
+}

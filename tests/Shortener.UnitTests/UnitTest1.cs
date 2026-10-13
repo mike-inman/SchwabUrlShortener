@@ -178,8 +178,35 @@ public class UrlShortenerServiceTests
         Assert.Equal(created.Id, (await service.ResolveAsync("guest123"))?.Id);
     }
 
+    [Fact]
+    public async Task WorkspaceOperationsRequireMembershipAndCachedRedirectCapturesClick()
+    {
+        var repo = new TestRepository();
+        var service = CreateService(repo, new TestCache());
+        var workspace = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        Assert.Null(await service.CreateWorkspaceManagedAsync("https://issuer.test", "outsider", workspace, "example.com", "work123"));
+        var created = await service.CreateWorkspaceManagedAsync("https://issuer.test", "member", workspace, "example.com", "work123");
+        Assert.NotNull(created);
+        Assert.False(created.Value.AlreadyExists);
+        Assert.Null(created.Value.Mapping.TenantId);
+        Assert.Equal(workspace, created.Value.Mapping.OwnerWorkspaceId);
+        Assert.True((await service.CreateWorkspaceManagedAsync("https://issuer.test", "member", workspace, "example.com", "work123"))!.Value.AlreadyExists);
+        Assert.Null(await service.GetWorkspaceManagedAsync("https://issuer.test", "member", other, "work123"));
+        Assert.Null(await service.GetWorkspaceManagedAsync("https://issuer.test", "outsider", workspace, "work123"));
+        Assert.Single((await service.GetWorkspaceAnalyticsAsync("https://issuer.test", "member", workspace))!);
+        Assert.Equal(created.Value.Mapping.Id, (await service.ResolveAsync("work123"))?.Id);
+        Assert.Equal(1, repo.CapturedClicks);
+    }
+
     private static UrlShortenerService CreateService(TestRepository repo, TestCache cache, TimeProvider? clock = null) =>
-        new(repo, cache, clock ?? TimeProvider.System, NullLogger<UrlShortenerService>.Instance);
+        new(repo, cache, new TestWorkspaceAccess(), clock ?? TimeProvider.System, NullLogger<UrlShortenerService>.Instance);
+
+    private sealed class TestWorkspaceAccess : IWorkspaceLinkAccess
+    {
+        public Task<bool> CanManageLinksAsync(string issuer, string subject, Guid workspaceId, CancellationToken cancellationToken = default)
+            => Task.FromResult(issuer == "https://issuer.test" && subject == "member" && workspaceId != Guid.Empty);
+    }
 
     private sealed class TestRepository : IUrlShortenerRepository
     {
@@ -187,14 +214,24 @@ public class UrlShortenerServiceTests
         public int MappingReads { get; private set; }
         public int CapturedClicks { get; private set; }
         public Task<bool> TryAddAsync(UrlMapping item, CancellationToken cancellationToken = default) => Task.FromResult(_items.TryAdd(item.ShortCode, item));
+        public Task<bool> TryAddWorkspaceAsync(UrlMapping item, string issuer, string subject, CancellationToken cancellationToken = default) => TryAddAsync(item, cancellationToken);
         public Task<UrlMapping?> GetByShortCodeAsync(string code, CancellationToken cancellationToken = default) { MappingReads++; return Task.FromResult(_items.GetValueOrDefault(code)); }
         public Task<UrlMapping?> GetManagedByShortCodeAsync(Guid tenant, string code, CancellationToken cancellationToken = default) => Task.FromResult(_items.GetValueOrDefault(code) is { Mode: LinkMode.Managed } m && m.TenantId == tenant ? m : null);
+        public Task<UrlMapping?> GetWorkspaceManagedByShortCodeAsync(Guid workspace, string code, string issuer, string subject, CancellationToken cancellationToken = default) => Task.FromResult(_items.GetValueOrDefault(code) is { Mode: LinkMode.Managed } m && m.OwnerWorkspaceId == workspace ? m : null);
+        public Task<IReadOnlyCollection<UrlMapping>> GetManagedByWorkspaceAsync(Guid workspace, string issuer, string subject, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<UrlMapping>>(_items.Values.Where(x => x.Mode == LinkMode.Managed && x.OwnerWorkspaceId == workspace).ToArray());
         public Task<UrlMapping?> GetManagedByOriginalUrlAsync(Guid tenant, string url, CancellationToken cancellationToken = default) => Task.FromResult(_items.Values.FirstOrDefault(x => x.Mode == LinkMode.Managed && x.TenantId == tenant && x.OriginalUrl == url));
         public Task<IReadOnlyCollection<UrlMapping>> GetManagedByTenantAsync(Guid tenant, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<UrlMapping>>(_items.Values.Where(x => x.Mode == LinkMode.Managed && x.TenantId == tenant).ToArray());
         public Task<Guid> CaptureManagedClickAsync(string mappingId, Guid tenantId, DateTimeOffset now,
             string? traceId, CancellationToken cancellationToken = default)
         {
             _ = _items.Values.Single(x => x.Id == mappingId && x.TenantId == tenantId);
+            CapturedClicks++;
+            return Task.FromResult(Guid.NewGuid());
+        }
+        public Task<Guid> CaptureWorkspaceClickAsync(string mappingId, Guid workspaceId, DateTimeOffset now,
+            string? traceId, CancellationToken cancellationToken = default)
+        {
+            _ = _items.Values.Single(x => x.Id == mappingId && x.OwnerWorkspaceId == workspaceId);
             CapturedClicks++;
             return Task.FromResult(Guid.NewGuid());
         }

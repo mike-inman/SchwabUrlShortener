@@ -19,6 +19,9 @@ public sealed class InMemoryUrlShortenerRepository : IUrlShortenerRepository
         }
     }
 
+    public Task<bool> TryAddWorkspaceAsync(UrlMapping mapping, string issuer, string subject,
+        CancellationToken cancellationToken = default) => TryAddAsync(mapping, cancellationToken);
+
     public Task<UrlMapping?> GetByShortCodeAsync(string shortCode, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -33,6 +36,24 @@ public sealed class InMemoryUrlShortenerRepository : IUrlShortenerRepository
             var mapping = _byCode.GetValueOrDefault(shortCode);
             return Task.FromResult(mapping is { Mode: LinkMode.Managed } && mapping.TenantId == tenantId ? mapping : null);
         }
+    }
+
+    public Task<UrlMapping?> GetWorkspaceManagedByShortCodeAsync(Guid workspaceId, string shortCode,
+        string issuer, string subject, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            var mapping = _byCode.GetValueOrDefault(shortCode);
+            return Task.FromResult(mapping is { Mode: LinkMode.Managed } && mapping.OwnerWorkspaceId == workspaceId ? mapping : null);
+        }
+    }
+
+    public Task<IReadOnlyCollection<UrlMapping>> GetManagedByWorkspaceAsync(Guid workspaceId,
+        string issuer, string subject, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate) return Task.FromResult<IReadOnlyCollection<UrlMapping>>(_byCode.Values.Where(x => x.Mode == LinkMode.Managed && x.OwnerWorkspaceId == workspaceId).ToArray());
     }
 
     public Task<UrlMapping?> GetManagedByOriginalUrlAsync(Guid tenantId, string originalUrl, CancellationToken cancellationToken = default)
@@ -58,6 +79,18 @@ public sealed class InMemoryUrlShortenerRepository : IUrlShortenerRepository
                 throw new InvalidOperationException("Managed link was not found.");
         }
         // This repository is a test double only. It cannot model a durable outbox.
+        return Task.FromResult(Guid.NewGuid());
+    }
+
+    public Task<Guid> CaptureWorkspaceClickAsync(string mappingId, Guid workspaceId, DateTimeOffset occurredAtUtc,
+        string? traceId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            if (!_byCode.Values.Any(x => x.Id == mappingId && x.OwnerWorkspaceId == workspaceId && x.Mode == LinkMode.Managed))
+                throw new InvalidOperationException("Workspace link was not found.");
+        }
         return Task.FromResult(Guid.NewGuid());
     }
 }

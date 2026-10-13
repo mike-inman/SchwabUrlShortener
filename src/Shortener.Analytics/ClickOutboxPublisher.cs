@@ -28,27 +28,34 @@ public sealed class ClickOutboxPublisher : IDisposable
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var select = new NpgsqlCommand("""
-            SELECT event_id, tenant_id, mapping_id, short_code, occurred_at_utc, trace_id, attempts
+            SELECT event_id, tenant_id, mapping_id, short_code, occurred_at_utc, trace_id, attempts,
+                   event_version, owner_workspace_id
             FROM click_outbox
             WHERE published_at_utc IS NULL AND failed_at_utc IS NULL AND next_attempt_at_utc <= now()
             ORDER BY captured_at_utc, event_id LIMIT 1 FOR UPDATE SKIP LOCKED
             """, connection, transaction);
-        ManagedClickEventV1? click = null;
+        IManagedClickEvent? click = null;
         int attempts = 0;
         await using (var reader = await select.ExecuteReaderAsync(cancellationToken))
         {
             if (await reader.ReadAsync(cancellationToken))
             {
-                click = new(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2),
-                    reader.GetString(3), reader.GetFieldValue<DateTimeOffset>(4),
-                    reader.IsDBNull(5) ? null : reader.GetString(5));
+                var traceId = reader.IsDBNull(5) ? null : reader.GetString(5);
+                click = reader.GetInt16(7) switch
+                {
+                    1 when !reader.IsDBNull(1) => new ManagedClickEventV1(reader.GetGuid(0), reader.GetGuid(1),
+                        reader.GetString(2), reader.GetString(3), reader.GetFieldValue<DateTimeOffset>(4), traceId),
+                    2 when !reader.IsDBNull(8) => new ManagedClickEventV2(reader.GetGuid(0), reader.GetGuid(8),
+                        reader.GetString(2), reader.GetString(3), reader.GetFieldValue<DateTimeOffset>(4), traceId),
+                    _ => throw new InvalidOperationException("Unsupported click outbox event version.")
+                };
                 attempts = reader.GetInt32(6);
             }
         }
         if (click is null) return PublishOutcome.NoWork;
         try
         {
-            var payload = JsonSerializer.Serialize(click);
+            var payload = JsonSerializer.Serialize(click, click.GetType());
             // Mapping ID keeps all events for one link on a stable Kafka partition.
             await _producer.ProduceAsync(_options.Topic,
                 new Message<string, string> { Key = click.MappingId, Value = payload }, cancellationToken)
@@ -73,8 +80,8 @@ public sealed class ClickOutboxPublisher : IDisposable
             await failure.ExecuteNonQueryAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             if (terminal) ClickAnalyticsMetrics.Failed.Add(1); else ClickAnalyticsMetrics.Retried.Add(1);
-            _logger.LogWarning("Click publish {Outcome}. EventId={EventId} TenantId={TenantId} MappingId={MappingId} Attempt={Attempt} ExceptionType={ExceptionType} TraceId={TraceId}",
-                terminal ? "failed" : "retry", click.EventId, click.TenantId, click.MappingId, nextAttempt, ex.GetType().Name, click.TraceId);
+            _logger.LogWarning("Click publish {Outcome}. EventId={EventId} Version={Version} MappingId={MappingId} Attempt={Attempt} ExceptionType={ExceptionType} TraceId={TraceId}",
+                terminal ? "failed" : "retry", click.EventId, click.Version, click.MappingId, nextAttempt, ex.GetType().Name, click.TraceId);
             return terminal ? PublishOutcome.Failed : PublishOutcome.Retried;
         }
         await using var published = new NpgsqlCommand(
@@ -84,8 +91,8 @@ public sealed class ClickOutboxPublisher : IDisposable
         await published.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         ClickAnalyticsMetrics.Published.Add(1);
-        _logger.LogInformation("Click published. EventId={EventId} TenantId={TenantId} MappingId={MappingId} TraceId={TraceId}",
-            click.EventId, click.TenantId, click.MappingId, click.TraceId);
+        _logger.LogInformation("Click published. EventId={EventId} Version={Version} MappingId={MappingId} TraceId={TraceId}",
+            click.EventId, click.Version, click.MappingId, click.TraceId);
         return PublishOutcome.Published;
     }
 

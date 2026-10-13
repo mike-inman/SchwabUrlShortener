@@ -1,7 +1,15 @@
 @inject IdentityAvailability Identity
 
 <nav aria-label="Main navigation" class="site-nav">
-    <a class="brand" href="/">Shortener</a>
+    <a class="brand" href="/" aria-label="@($"{BrandText.Name} home")">
+        <svg viewBox="0 0 48 48" aria-hidden="true">
+            <circle cx="9" cy="13" r="3.4" fill="none" stroke="#59E6CF" stroke-width="2.6"/>
+            <path d="M16 13H38L12 35H33" fill="none" stroke="#59E6CF" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="40" cy="35" r="4.2" fill="#F2BC68"/>
+        </svg>
+        <span>@BrandText.Name.ToLowerInvariant()</span>
+    </a>
+    <WorkspaceSwitcher />
     <NavLink href="/" Match="NavLinkMatch.All">Guest link</NavLink>
     @if (Identity.Configured)
     {

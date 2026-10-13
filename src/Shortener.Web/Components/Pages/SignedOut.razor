@@ -1,0 +1,14 @@
+@page "/signed-out"
+@attribute [AllowAnonymous]
+
+<PageTitle>Signed out · @BrandText.TitleSuffix</PageTitle>
+
+<section class="signed-out-panel zl-panel">
+    <p class="zl-eyebrow">@BrandText.Tagline</p>
+    <h1>You're signed out.</h1>
+    <p class="lead">You can sign in again whenever you're ready.</p>
+    <div class="signed-out-actions">
+        <a class="btn btn-primary" href="/account/signin">Sign in again</a>
+        <a href="/">Go home</a>
+    </div>
+</section>

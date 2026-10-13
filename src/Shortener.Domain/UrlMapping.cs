@@ -9,6 +9,7 @@ public sealed class UrlMapping
     public string OriginalUrl { get; private init; } = string.Empty;
     public LinkMode Mode { get; private init; }
     public Guid? TenantId { get; private init; }
+    public Guid? OwnerWorkspaceId { get; private set; }
     public DateTimeOffset CreatedAtUtc { get; private init; }
     public DateTimeOffset? ExpiresAtUtc { get; private init; }
     public DateTimeOffset? LastAccessedAtUtc { get; private set; }
@@ -21,6 +22,21 @@ public sealed class UrlMapping
     {
         if (tenantId == Guid.Empty) throw new ArgumentException("A valid tenant is required.", nameof(tenantId));
         return Create(originalUrl, shortCode, LinkMode.Managed, tenantId, createdAtUtc);
+    }
+
+    public static UrlMapping CreateWorkspaceManaged(string originalUrl, string shortCode, Guid workspaceId, DateTimeOffset createdAtUtc)
+    {
+        if (workspaceId == Guid.Empty) throw new ArgumentException("A valid workspace is required.", nameof(workspaceId));
+        var mapping = Create(originalUrl, shortCode, LinkMode.Managed, null, createdAtUtc);
+        mapping.OwnerWorkspaceId = workspaceId;
+        return mapping;
+    }
+
+    public void AssignLegacyWorkspace(Guid workspaceId)
+    {
+        if (Mode != LinkMode.Managed || TenantId is null || workspaceId == Guid.Empty)
+            throw new InvalidOperationException("Only a legacy managed link can receive a legacy workspace.");
+        OwnerWorkspaceId = workspaceId;
     }
 
     private static UrlMapping Create(string originalUrl, string shortCode, LinkMode mode, Guid? tenantId, DateTimeOffset createdAtUtc)

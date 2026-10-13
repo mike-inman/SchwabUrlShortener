@@ -37,6 +37,7 @@ builder.Services.AddSingleton<ClickOutboxPublisher>();
 builder.Services.AddSingleton<ClickKafkaConsumer>();
 builder.Services.AddHostedService<OutboxWorker>();
 builder.Services.AddHostedService<ConsumerWorker>();
+builder.Services.AddHostedService<AnalyticsDependencyMonitor>();
 
 var host = builder.Build();
 var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();

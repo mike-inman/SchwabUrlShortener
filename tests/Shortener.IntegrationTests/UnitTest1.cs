@@ -5,6 +5,9 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -463,6 +466,217 @@ public class ShortenerApiTests
         Assert.Equal("ck_url_mappings_link_mode", missingExpiry.ConstraintName);
     }
 
+    [Fact]
+    public async Task WorkspaceApiIsolatesIndividualsTeamsAndVersionedClicksInTemporarySchema()
+    {
+        var source = Environment.GetEnvironmentVariable("ConnectionStrings__ShortenerDb")
+            ?? throw new InvalidOperationException("Real PostgreSQL test connection is required.");
+        var target = new NpgsqlConnectionStringBuilder(source);
+        if (!GuardedTestDatabase.IsAllowed(target))
+            throw new InvalidOperationException("Workspace API tests require the guarded disposable Schwab_test_local database.");
+        var schema = "schwab_workspace_" + Guid.NewGuid().ToString("N");
+        await using var admin = new NpgsqlConnection(source);
+        await admin.OpenAsync();
+        await using (var createSchema = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await createSchema.ExecuteNonQueryAsync();
+        try
+        {
+            target.SearchPath = $"{schema},public";
+            var dbOptions = new DbContextOptionsBuilder<ShortenerDbContext>()
+                .UseNpgsql(target.ConnectionString, npgsql => npgsql.MigrationsHistoryTable("__EFMigrationsHistory", schema)).Options;
+            await using (var migrationDb = new ShortenerDbContext(dbOptions))
+            {
+                var migrator = migrationDb.Database.GetService<IMigrator>();
+                await migrator.MigrateAsync("20261013121515_AccountOwnershipFoundation");
+                await using (var old = new NpgsqlConnection(target.ConnectionString))
+                {
+                    await old.OpenAsync();
+                    await using var seed = new NpgsqlCommand("""
+                        INSERT INTO url_mappings (id, short_code, original_url, mode, tenant_id, created_at_utc, hit_count)
+                        VALUES ('old-workspace-link', 'oldlegacy', 'https://legacy.example', 1,
+                                'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', now(), 3);
+                        INSERT INTO click_outbox (event_id, tenant_id, mapping_id, short_code, occurred_at_utc)
+                        VALUES ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+                                'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'old-workspace-link', 'oldlegacy', now());
+                        """, old);
+                    await seed.ExecuteNonQueryAsync();
+                }
+                await migrator.MigrateAsync();
+                Assert.Empty(await migrationDb.Database.GetPendingMigrationsAsync());
+                await migrationDb.Database.MigrateAsync();
+            }
+            var now = DateTimeOffset.UtcNow;
+            var users = Enumerable.Range(0, 5).Select(_ => Guid.NewGuid()).ToArray();
+            var workspaces = Enumerable.Range(0, 4).Select(_ => Guid.NewGuid()).ToArray();
+            Guid legacyWorkspace;
+            await using (var db = new ShortenerDbContext(dbOptions))
+            {
+                legacyWorkspace = await db.Workspaces.Where(x => x.LegacyTenantId == TenantA).Select(x => x.Id).SingleAsync();
+                db.ApplicationUsers.AddRange(users.Select((id, i) => new ApplicationUser
+                    { Id = id, CreatedAtUtc = now, ContactEmail = i is 0 or 4 ? "same@example.test" : null }));
+                db.ExternalIdentities.AddRange(users.Select((id, i) => new ExternalIdentity
+                    { Id = Guid.NewGuid(), UserId = id, Issuer = "https://issuer.example/validated", Subject = "person-" + i, CreatedAtUtc = now }));
+                db.Workspaces.AddRange(
+                    new Workspace { Id = workspaces[0], Kind = WorkspaceKind.Personal, PersonalOwnerUserId = users[0], Name = "Personal A", CreatedAtUtc = now },
+                    new Workspace { Id = workspaces[1], Kind = WorkspaceKind.Personal, PersonalOwnerUserId = users[4], Name = "Personal B", CreatedAtUtc = now },
+                    new Workspace { Id = workspaces[2], Kind = WorkspaceKind.Team, Name = "Team A", CreatedAtUtc = now },
+                    new Workspace { Id = workspaces[3], Kind = WorkspaceKind.Team, Name = "Team B", CreatedAtUtc = now });
+                db.WorkspaceMemberships.AddRange(
+                    new WorkspaceMembership { WorkspaceId = workspaces[2], UserId = users[0], Role = TeamRole.Owner, CreatedAtUtc = now },
+                    new WorkspaceMembership { WorkspaceId = workspaces[2], UserId = users[1], Role = TeamRole.Admin, CreatedAtUtc = now },
+                    new WorkspaceMembership { WorkspaceId = workspaces[2], UserId = users[2], Role = TeamRole.Member, CreatedAtUtc = now },
+                    new WorkspaceMembership { WorkspaceId = workspaces[3], UserId = users[4], Role = TeamRole.Owner, CreatedAtUtc = now },
+                    new WorkspaceMembership { WorkspaceId = legacyWorkspace, UserId = users[0], Role = TeamRole.Member, CreatedAtUtc = now });
+                await db.SaveChangesAsync();
+            }
+            using var factory = new TestFactory(resetDatabase: false, testSchema: schema);
+            using var legacy = ClientFor(factory, TenantA);
+            HttpClient Identity(int person, string? issuer = "https://issuer.example/validated", bool includeSubject = true)
+            {
+                var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+                    { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+                if (includeSubject) client.DefaultRequestHeaders.Add("X-Test-Subject", "person-" + person);
+                else client.DefaultRequestHeaders.Add("X-Test-Tenant", TenantA.ToString());
+                if (issuer is not null) client.DefaultRequestHeaders.Add("X-Test-Issuer", issuer);
+                client.DefaultRequestHeaders.Add("X-Test-Scope", "access_as_user");
+                return client;
+            }
+            string Path(Guid id) => $"/api/workspaces/{id}/urls/managed";
+            using var owner = Identity(0);
+            using var adminUser = Identity(1);
+            using var member = Identity(2);
+            using var sameEmail = Identity(4);
+            using var wrongIssuer = Identity(0, "https://issuer.example/wrong");
+            using var missingIssuer = Identity(0, null);
+            using var missingSubject = Identity(0, includeSubject: false);
+            using var firstLogin = Identity(99);
+            var newPersonal = Assert.Single((await firstLogin.GetFromJsonAsync<CustomerWorkspace[]>("/api/me/workspaces"))!);
+            Assert.Equal(WorkspaceKind.Personal, newPersonal.Kind);
+            Assert.Equal(newPersonal.Id, Assert.Single((await firstLogin.GetFromJsonAsync<CustomerWorkspace[]>("/api/me/workspaces"))!).Id);
+            Assert.DoesNotContain(newPersonal.Id, (await owner.GetFromJsonAsync<CustomerWorkspace[]>("/api/me/workspaces"))!.Select(x => x.Id));
+            using var missingScope = factory.CreateClient(new WebApplicationFactoryClientOptions
+                { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+            missingScope.DefaultRequestHeaders.Add("X-Test-Subject", "person-0");
+            missingScope.DefaultRequestHeaders.Add("X-Test-Issuer", "https://issuer.example/validated");
+            Assert.Equal(HttpStatusCode.Forbidden, (await missingScope.GetAsync(Path(workspaces[0]) + "/analytics")).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await legacy.GetAsync("/api/urls/managed/oldlegacy")).StatusCode);
+            Assert.Equal(HttpStatusCode.Created, (await legacy.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "legacynew.example", shortCode = "legacynew" })).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync(Path(legacyWorkspace) + "/oldlegacy")).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync(Path(legacyWorkspace) + "/legacynew")).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await sameEmail.GetAsync(Path(legacyWorkspace) + "/oldlegacy")).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await sameEmail.GetAsync(Path(workspaces[1]) + "/oldlegacy")).StatusCode);
+            Assert.Equal(HttpStatusCode.Created, (await owner.PostAsJsonAsync(Path(workspaces[0]), new { originalUrl = "example.com", shortCode = "personala" })).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await sameEmail.GetAsync(Path(workspaces[0]) + "/personala")).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await wrongIssuer.GetAsync(Path(workspaces[0]) + "/personala")).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await missingIssuer.GetAsync(Path(workspaces[0]) + "/personala")).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await missingSubject.GetAsync(Path(workspaces[0]) + "/personala")).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync(Path(workspaces[1]) + "/personala")).StatusCode);
+            Assert.Equal(HttpStatusCode.Created, (await sameEmail.PostAsJsonAsync(Path(workspaces[1]), new { originalUrl = "example.org", shortCode = "personalb" })).StatusCode);
+            Assert.Equal(HttpStatusCode.Created, (await owner.PostAsJsonAsync(Path(workspaces[2]), new { originalUrl = "owner.example", shortCode = "teamown" })).StatusCode);
+            Assert.Equal(HttpStatusCode.Created, (await adminUser.PostAsJsonAsync(Path(workspaces[2]), new { originalUrl = "admin.example", shortCode = "teamadmin" })).StatusCode);
+            Assert.Equal(HttpStatusCode.Created, (await member.PostAsJsonAsync(Path(workspaces[2]), new { originalUrl = "member.example", shortCode = "teammem" })).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await member.GetAsync(Path(workspaces[2]) + "/teamadmin/analytics")).StatusCode);
+            Assert.Equal(3, (await member.GetFromJsonAsync<ManagedUrlResponse[]>(Path(workspaces[2]) + "/analytics"))!.Length);
+            Assert.Equal(HttpStatusCode.NotFound, (await member.GetAsync(Path(workspaces[3]) + "/analytics")).StatusCode);
+            Assert.Equal(HttpStatusCode.Conflict, (await sameEmail.PostAsJsonAsync(Path(workspaces[3]), new { originalUrl = "different.example", shortCode = "teamadmin" })).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await adminUser.PostAsJsonAsync(Path(workspaces[2]), new { originalUrl = "admin.example", shortCode = "teamadmin" })).StatusCode);
+            await using (var db = new ShortenerDbContext(dbOptions))
+            {
+                db.WorkspaceMemberships.Remove(await db.WorkspaceMemberships.SingleAsync(x => x.WorkspaceId == workspaces[2] && x.UserId == users[2]));
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(HttpStatusCode.NotFound, (await member.GetAsync(Path(workspaces[2]) + "/teamadmin")).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await member.PostAsJsonAsync(Path(workspaces[2]), new { originalUrl = "example.com", shortCode = "revoked" })).StatusCode);
+            using var publicClient = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+            Assert.Equal(HttpStatusCode.Redirect, (await publicClient.GetAsync("/r/teamadmin")).StatusCode);
+            await using (var redis = await ConnectionMultiplexer.ConnectAsync(factory.RedisConnectionString))
+            {
+                var cached = await redis.GetDatabase().StringGetAsync(RedisRedirectCache.KeyFor("teamadmin", factory.RedisNamespace));
+                Assert.False(cached.IsNull);
+                var targetInCache = JsonSerializer.Deserialize<RedirectTarget>((string)cached!, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                Assert.Equal(workspaces[2], targetInCache?.OwnerWorkspaceId);
+                Assert.Null(targetInCache?.TenantId);
+            }
+            await using var connection = new NpgsqlConnection(target.ConnectionString);
+            await connection.OpenAsync();
+            await using (var invalidMapping = new NpgsqlCommand("""
+                INSERT INTO url_mappings (id, short_code, original_url, mode, created_at_utc, hit_count)
+                VALUES ('invalid-workspace', 'invalidws', 'https://example.com', 1, now(), 0)
+                """, connection))
+            {
+                var error = await Assert.ThrowsAsync<PostgresException>(() => invalidMapping.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.CheckViolation, error.SqlState);
+            }
+            await using (var invalidEvent = new NpgsqlCommand("""
+                INSERT INTO click_outbox (event_id, tenant_id, mapping_id, short_code, occurred_at_utc, event_version)
+                VALUES ('dddddddd-dddd-dddd-dddd-dddddddddddd',
+                        'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'old-workspace-link', 'oldlegacy', now(), 2)
+                """, connection))
+            {
+                var error = await Assert.ThrowsAsync<PostgresException>(() => invalidEvent.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.CheckViolation, error.SqlState);
+            }
+            await using (var legacyCheck = new NpgsqlCommand("""
+                SELECT count(*), count(owner_workspace_id) FROM url_mappings
+                WHERE short_code IN ('oldlegacy', 'legacynew') AND tenant_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+                """, connection))
+            await using (var row = await legacyCheck.ExecuteReaderAsync())
+            {
+                Assert.True(await row.ReadAsync());
+                Assert.Equal(2L, row.GetInt64(0));
+                Assert.Equal(2L, row.GetInt64(1));
+            }
+            await using (var check = new NpgsqlCommand("SELECT event_version, tenant_id IS NULL, owner_workspace_id FROM click_outbox WHERE short_code = 'teamadmin'", connection))
+            await using (var row = await check.ExecuteReaderAsync())
+            {
+                Assert.True(await row.ReadAsync());
+                Assert.Equal(2, row.GetInt16(0));
+                Assert.True(row.GetBoolean(1));
+                Assert.Equal(workspaces[2], row.GetGuid(2));
+            }
+            await using var dataSource = new NpgsqlDataSourceBuilder(target.ConnectionString).Build();
+            var store = new PostgresClickEventStore(dataSource);
+            var pendingV1 = new ManagedClickEventV1(Guid.Parse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"), TenantA,
+                "old-workspace-link", "oldlegacy", DateTimeOffset.UtcNow, null);
+            Assert.True(await store.ApplyAsync(pendingV1));
+            Assert.False(await store.ApplyAsync(pendingV1));
+            ManagedClickEventV2 v2Click;
+            await using (var read = new NpgsqlCommand("SELECT event_id, owner_workspace_id, mapping_id, short_code, occurred_at_utc FROM click_outbox WHERE short_code = 'teamadmin'", connection))
+            await using (var row = await read.ExecuteReaderAsync())
+            {
+                Assert.True(await row.ReadAsync());
+                v2Click = new ManagedClickEventV2(row.GetGuid(0), row.GetGuid(1), row.GetString(2), row.GetString(3), row.GetFieldValue<DateTimeOffset>(4), null);
+            }
+            await Assert.ThrowsAsync<InvalidClickEventException>(() => store.ApplyAsync(v2Click with { EventId = Guid.NewGuid(), WorkspaceId = workspaces[3] }));
+            var broker = Environment.GetEnvironmentVariable("Kafka__BootstrapServers")
+                ?? throw new InvalidOperationException("Dedicated Kafka test broker is required.");
+            var topic = "schwab-workspace-click-" + Guid.NewGuid().ToString("N");
+            using (var kafkaAdmin = new AdminClientBuilder(new AdminClientConfig { BootstrapServers = broker }).Build())
+                await kafkaAdmin.CreateTopicsAsync([new TopicSpecification { Name = topic, NumPartitions = 1, ReplicationFactor = 1 }]);
+            var options = new AnalyticsOptions(broker, topic, "schwab-workspace-" + Guid.NewGuid().ToString("N"));
+            using var publisher = new ClickOutboxPublisher(dataSource, options, NullLogger<ClickOutboxPublisher>.Instance);
+            Assert.Equal(PublishOutcome.Published, await publisher.PublishOneAsync());
+            Assert.Equal(PublishOutcome.Published, await publisher.PublishOneAsync());
+            using (var consumer = new ClickKafkaConsumer(options, store, NullLogger<ClickKafkaConsumer>.Instance))
+            {
+                Assert.Equal(ConsumeOutcome.Duplicate, await ConsumeUntilAsync(consumer, ConsumeOutcome.Duplicate));
+                Assert.Equal(ConsumeOutcome.Applied, await ConsumeUntilAsync(consumer, ConsumeOutcome.Applied));
+            }
+            using (var replay = new ClickKafkaConsumer(options with { ConsumerGroup = "schwab-workspace-replay-" + Guid.NewGuid().ToString("N") }, store, NullLogger<ClickKafkaConsumer>.Instance))
+            {
+                Assert.Equal(ConsumeOutcome.Duplicate, await ConsumeUntilAsync(replay, ConsumeOutcome.Duplicate));
+                Assert.Equal(ConsumeOutcome.Duplicate, await ConsumeUntilAsync(replay, ConsumeOutcome.Duplicate));
+            }
+            Assert.False(await store.ApplyAsync(v2Click));
+            Assert.Equal(1, (await adminUser.GetFromJsonAsync<ManagedUrlResponse>(Path(workspaces[2]) + "/teamadmin/analytics"))!.HitCount);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private static HttpClient ClientFor(TestFactory factory, Guid tenant, string? scope = "access_as_user")
     {
         var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
@@ -480,19 +694,28 @@ public class ShortenerApiTests
         public string RedisNamespace { get; }
         public AdjustableClock Clock { get; } = new();
         public TestFactory(bool resetDatabase = true, bool unavailableDatabase = false,
-            bool unavailableRedis = false, string? redisNamespace = null)
+            bool unavailableRedis = false, string? redisNamespace = null, string? testSchema = null)
         {
             ConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__ShortenerDb")
                 ?? throw new InvalidOperationException("Real PostgreSQL test connection must be provided in ConnectionStrings__ShortenerDb.");
             var databaseName = new NpgsqlConnectionStringBuilder(ConnectionString).Database;
             if (databaseName != "Schwab_test_local")
                 throw new InvalidOperationException("Integration tests require the disposable database Schwab_test_local.");
+            if (testSchema is not null)
+            {
+                if (!testSchema.StartsWith("schwab_workspace_", StringComparison.Ordinal) ||
+                    testSchema.Any(c => !(char.IsAsciiLetterOrDigit(c) || c == '_')))
+                    throw new InvalidOperationException("Invalid disposable workspace test schema.");
+                ConnectionString = new NpgsqlConnectionStringBuilder(ConnectionString)
+                    { SearchPath = $"{testSchema},public" }.ConnectionString;
+            }
             RedisConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Redis")
                 ?? throw new InvalidOperationException("Real Redis test connection must be provided in ConnectionStrings__Redis.");
             RedisNamespace = redisNamespace ?? "shortener:redirect:test:" + Guid.NewGuid().ToString("N");
             _unavailableDatabase = unavailableDatabase;
             _unavailableRedis = unavailableRedis;
             if (!resetDatabase) return;
+            if (testSchema is not null) throw new InvalidOperationException("Temporary schema tests must not truncate tables.");
             using var connection = new NpgsqlConnection(ConnectionString);
             connection.Open();
             using var command = new NpgsqlCommand("TRUNCATE TABLE click_dead_letters, processed_click_events, click_outbox, url_mappings", connection);
@@ -542,9 +765,14 @@ public class ShortenerApiTests
             : base(options, logger, encoder) { }
         protected override Task<AuthenticateResult> HandleAuthenticateAsync()
         {
-            if (!Request.Headers.TryGetValue("X-Test-Tenant", out var value))
+            var hasTenant = Request.Headers.TryGetValue("X-Test-Tenant", out var value);
+            var hasSubject = Request.Headers.TryGetValue("X-Test-Subject", out var subject);
+            if (!hasTenant && !hasSubject)
                 return Task.FromResult(AuthenticateResult.NoResult());
-            var claims = new List<Claim> { new("tid", value.ToString()) };
+            var claims = new List<Claim>();
+            if (hasTenant) claims.Add(new("tid", value.ToString()));
+            if (hasSubject) claims.Add(new("sub", subject.ToString()));
+            if (Request.Headers.TryGetValue("X-Test-Issuer", out var issuer)) claims.Add(new("iss", issuer.ToString()));
             if (Request.Headers.TryGetValue("X-Test-Scope", out var scope)) claims.Add(new Claim("scp", scope.ToString()));
             var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"));
             return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(principal, "Test")));

@@ -54,7 +54,7 @@ services:
   kafka-init:
     image: apache/kafka:4.1.0
     entrypoint: ["/opt/kafka/bin/kafka-topics.sh"]
-    command: ["--bootstrap-server", "kafka:9092", "--create", "--if-not-exists", "--topic", "${KAFKA_TOPIC:-managed-clicks-v1}", "--partitions", "3", "--replication-factor", "1"]
+    command: ["--bootstrap-server", "kafka:9092", "--create", "--if-not-exists", "--topic", "${KAFKA_TOPIC:-managed-clicks-v2}", "--partitions", "3", "--replication-factor", "1"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -116,7 +116,7 @@ services:
         PROJECT: src/Shortener.Web/Shortener.Web.csproj
     environment:
       ShortenerApi__BaseUrl: http://api:8080/
-      ShortenerApi__AllowHttpInternal: "true"
+      ShortenerApi__AllowedInternalHttpHosts: api
       ShortenerApi__Scope: ${API_SCOPE:-}
       PublicLinks__BaseUrl: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL in the chosen env file}
       AllowedHosts: ${PUBLIC_DOMAIN:-localhost}
@@ -150,7 +150,7 @@ services:
     environment:
       ConnectionStrings__ShortenerDb: Host=db;Port=5432;Database=shortener;Username=shortener;Password=${POSTGRES_PASSWORD}
       Kafka__BootstrapServers: kafka:9092
-      Kafka__Topic: ${KAFKA_TOPIC:-managed-clicks-v1}
+      Kafka__Topic: ${KAFKA_TOPIC:-managed-clicks-v2}
       Kafka__ConsumerGroup: ${KAFKA_CONSUMER_GROUP:-shortener-analytics-v1}
     healthcheck:
       test: ["CMD", "dotnet", "Shortener.Analytics.dll", "--healthcheck"]
