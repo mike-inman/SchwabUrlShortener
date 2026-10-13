@@ -119,8 +119,9 @@ else
     private string? error;
     private readonly CancellationTokenSource liveCancellation = new();
     private IDisposable? liveSubscription;
-    private CancellationTokenSource? debounceCancellation;
-    private Task? debounceTask;
+    private CancellationTokenSource? pendingRefreshCancellation;
+    private Task? pendingRefreshTask;
+    private bool refreshPending;
 
     protected override async Task OnInitializedAsync()
     {
@@ -162,7 +163,7 @@ else
             if (!Guid.TryParse(tenant, out id) || id == Guid.Empty) return;
             scope = LinkChangeScope.Tenant;
         }
-        debounceCancellation?.Cancel();
+        CancelPendingRefresh();
         liveSubscription?.Dispose();
         liveSubscription = LiveUpdates.Subscribe(scope, id, () => InvokeAsync(QueueRefresh));
         LiveUpdates.ConnectionChanged -= OnConnectionChanged;
@@ -179,22 +180,36 @@ else
 
     private void QueueRefresh()
     {
-        if (liveCancellation.IsCancellationRequested || reauthRequired) return;
-        debounceCancellation?.Cancel();
-        debounceCancellation?.Dispose();
-        debounceCancellation = CancellationTokenSource.CreateLinkedTokenSource(liveCancellation.Token);
-        debounceTask = DebounceAsync(debounceCancellation.Token);
+        if (liveCancellation.IsCancellationRequested || reauthRequired || refreshPending) return;
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(liveCancellation.Token);
+        pendingRefreshCancellation = cancellation;
+        refreshPending = true;
+        pendingRefreshTask = ThrottleAsync(cancellation);
     }
 
-    private async Task DebounceAsync(CancellationToken cancellationToken)
+    private void CancelPendingRefresh()
+    {
+        pendingRefreshCancellation?.Cancel();
+        pendingRefreshCancellation = null;
+        refreshPending = false;
+    }
+
+    private async Task ThrottleAsync(CancellationTokenSource cancellation)
     {
         try
         {
             var milliseconds = int.Parse(Configuration["LiveUpdates:DebounceMilliseconds"]!);
-            await Task.Delay(milliseconds, cancellationToken);
-            await InvokeAsync(RefreshLiveAsync);
+            await Task.Delay(milliseconds, cancellation.Token);
+            await InvokeAsync(async () =>
+            {
+                if (cancellation.IsCancellationRequested || !ReferenceEquals(pendingRefreshCancellation, cancellation)) return;
+                pendingRefreshCancellation = null;
+                refreshPending = false;
+                await RefreshLiveAsync();
+            });
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        finally { cancellation.Dispose(); }
     }
 
     private async Task RefreshLiveAsync()
@@ -234,14 +249,13 @@ else
         WorkspaceNavigation.Clear(SelectWorkspaceAsync);
         LiveUpdates.ConnectionChanged -= OnConnectionChanged;
         liveSubscription?.Dispose();
-        debounceCancellation?.Cancel();
+        CancelPendingRefresh();
         await liveCancellation.CancelAsync();
-        if (debounceTask is not null)
+        if (pendingRefreshTask is not null)
         {
-            try { await debounceTask; }
+            try { await pendingRefreshTask; }
             catch (OperationCanceledException) { }
         }
-        debounceCancellation?.Dispose();
         liveCancellation.Dispose();
         noticeCancellation?.Cancel();
         noticeCancellation?.Dispose();

@@ -207,6 +207,57 @@ public sealed class ComponentTests : BunitContext
     }
 
     [Fact]
+    public async Task Dashboard_refreshes_during_sustained_signals()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        auth.SetClaims(new Claim("tid", Tenant.ToString()));
+        var api = Setup();
+        Services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["LiveUpdates:DebounceMilliseconds"] = "1000" }).Build());
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        var view = Render<Dashboard>();
+        view.WaitForAssertion(() => Assert.Equal(1, api.AuthenticatedCalls));
+
+        for (var i = 0; i < 25; i++)
+        {
+            liveUpdates.Signal(LinkChangeScope.Tenant, Tenant);
+            await Task.Delay(200);
+        }
+        await Task.Delay(300);
+        Assert.InRange(api.AuthenticatedCalls - 1, 4, 6);
+        await view.Instance.DisposeAsync();
+        view.Dispose();
+    }
+
+    [Fact]
+    public async Task Workspace_switch_and_disposal_cancel_pending_refreshes()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup(customer: true);
+        var personal = new WorkspaceSummary(Guid.NewGuid(), "Personal", 0);
+        var team = new WorkspaceSummary(Guid.NewGuid(), "Team", 1);
+        api.Workspaces = _ => Task.FromResult<IReadOnlyList<WorkspaceSummary>>([personal, team]);
+        api.WorkspaceList = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        var view = Render<Dashboard>();
+        view.WaitForAssertion(() => Assert.Equal(1, liveUpdates.SubscriptionCount));
+        Assert.Single(api.WorkspaceReads);
+
+        liveUpdates.Signal(LinkChangeScope.Workspace, personal.Id);
+        await Services.GetRequiredService<WorkspaceNavigationState>().SelectAsync(team.Id);
+        Assert.Equal(2, api.WorkspaceReads.Count);
+        await Task.Delay(200);
+        Assert.Equal(2, api.WorkspaceReads.Count);
+
+        liveUpdates.Signal(LinkChangeScope.Workspace, team.Id);
+        await view.Instance.DisposeAsync();
+        view.Dispose();
+        await Task.Delay(200);
+        Assert.Equal(2, api.WorkspaceReads.Count);
+    }
+
+    [Fact]
     public void Dashboard_shows_loading_then_error()
     {
         var auth = AddAuthorization();
@@ -322,6 +373,7 @@ public sealed class ComponentTests : BunitContext
     private sealed class FakeLiveUpdates : ILinkChangeSubscriber
     {
         private readonly List<(LinkChangeScope Scope, Guid Id, Func<Task> Callback)> callbacks = [];
+        public int SubscriptionCount => callbacks.Count;
         public bool IsConnected => true;
         public event Action<bool>? ConnectionChanged
         {
