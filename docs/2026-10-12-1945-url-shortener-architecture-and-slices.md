@@ -39,8 +39,8 @@ The solution should be intentionally straightforward for the exercise, but produ
 3. API writes the mapping to PostgreSQL.
 4. Optional Redis cache stores hot redirects.
 5. Redirect requests hit Redis first for low-latency lookup.
-6. On redirect or click, a Kafka event is emitted asynchronously.
-7. A .NET background worker consumes the event and updates analytics aggregates in PostgreSQL.
+6. A managed redirect commits a tenant-owned click event in PostgreSQL's outbox before responding; guest redirects create no event.
+7. The Analytics worker publishes the outbox event to Kafka and consumes it to update PostgreSQL aggregates with event-ID deduplication.
 8. Blazor Server dashboard reads operational metrics and health status from the application and datastore.
 
 This architecture supports the following interview narratives:

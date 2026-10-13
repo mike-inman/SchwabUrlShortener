@@ -47,7 +47,8 @@ public sealed class InMemoryUrlShortenerRepository : IUrlShortenerRepository
         lock (_gate) return Task.FromResult<IReadOnlyCollection<UrlMapping>>(_byCode.Values.Where(x => x.Mode == LinkMode.Managed && x.TenantId == tenantId).OrderByDescending(x => x.CreatedAtUtc).ToArray());
     }
 
-    public Task RecordManagedHitAsync(string mappingId, Guid tenantId, DateTimeOffset timestampUtc, CancellationToken cancellationToken = default)
+    public Task<Guid> CaptureManagedClickAsync(string mappingId, Guid tenantId, DateTimeOffset occurredAtUtc,
+        string? traceId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
@@ -55,8 +56,8 @@ public sealed class InMemoryUrlShortenerRepository : IUrlShortenerRepository
             var stored = _byCode.Values.SingleOrDefault(x => x.Id == mappingId && x.TenantId == tenantId && x.Mode == LinkMode.Managed);
             if (stored is null)
                 throw new InvalidOperationException("Managed link was not found.");
-            stored.RecordManagedHit(timestampUtc);
         }
-        return Task.CompletedTask;
+        // This repository is a test double only. It cannot model a durable outbox.
+        return Task.FromResult(Guid.NewGuid());
     }
 }

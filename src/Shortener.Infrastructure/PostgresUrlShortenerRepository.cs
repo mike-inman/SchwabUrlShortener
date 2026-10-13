@@ -43,14 +43,17 @@ public sealed class PostgresUrlShortenerRepository(
             .Where(x => x.Mode == LinkMode.Managed && x.TenantId == tenantId)
             .OrderByDescending(x => x.CreatedAtUtc).ToArrayAsync(cancellationToken), cancellationToken);
 
-    public async Task RecordManagedHitAsync(string mappingId, Guid tenantId, DateTimeOffset timestampUtc, CancellationToken cancellationToken = default)
+    public async Task<Guid> CaptureManagedClickAsync(string mappingId, Guid tenantId, DateTimeOffset occurredAtUtc,
+        string? traceId, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(mappingId) || tenantId == Guid.Empty)
             throw new ArgumentException("A managed link and tenant are required.");
-        var count = await WithDbAsync("RecordManagedHit", db => db.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE url_mappings SET hit_count = hit_count + 1, last_accessed_at_utc = {timestampUtc} WHERE id = {mappingId} AND mode = 1 AND tenant_id = {tenantId}",
+        var eventId = Guid.NewGuid();
+        var count = await WithDbAsync("CaptureManagedClick", db => db.Database.ExecuteSqlInterpolatedAsync(
+            $"INSERT INTO click_outbox (event_id, tenant_id, mapping_id, short_code, occurred_at_utc, trace_id) SELECT {eventId}, tenant_id, id, short_code, {occurredAtUtc}, {traceId} FROM url_mappings WHERE id = {mappingId} AND mode = 1 AND tenant_id = {tenantId}",
             cancellationToken), cancellationToken);
-        if (count != 1) throw new InvalidOperationException("Managed link was not found for analytics update.");
+        if (count != 1) throw new InvalidOperationException("Managed link was not found for click capture.");
+        return eventId;
     }
 
     private async Task<T> WithDbAsync<T>(string operation, Func<ShortenerDbContext, Task<T>> action, CancellationToken cancellationToken)

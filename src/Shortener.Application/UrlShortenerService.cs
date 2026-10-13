@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging;
 using Shortener.Application.Interfaces;
 using Shortener.Domain;
@@ -8,6 +9,8 @@ namespace Shortener.Application;
 
 public sealed class UrlShortenerService : IUrlShortenerService
 {
+    private static readonly Meter ClickMeter = new("Shortener.ClickCapture", "1.0");
+    private static readonly Counter<long> CapturedClicks = ClickMeter.CreateCounter<long>("shortener.clicks.captured");
     private const string AllowedChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     private readonly IUrlShortenerRepository _repository;
     private readonly IRedirectCache _cache;
@@ -109,7 +112,13 @@ public sealed class UrlShortenerService : IUrlShortenerService
         }
         if (target.IsExpired(_clock.GetUtcNow())) return null;
         if (target.Mode == LinkMode.Managed)
-            await _repository.RecordManagedHitAsync(target.Id, target.TenantId!.Value, _clock.GetUtcNow(), cancellationToken);
+        {
+            var eventId = await _repository.CaptureManagedClickAsync(
+                target.Id, target.TenantId!.Value, _clock.GetUtcNow(), Activity.Current?.Id, cancellationToken);
+            CapturedClicks.Add(1);
+            _logger.LogInformation("Managed click captured. EventId={EventId} TenantId={TenantId} MappingId={MappingId} CorrelationId={CorrelationId}",
+                eventId, target.TenantId, target.Id, Activity.Current?.Id);
+        }
         return target;
     }
 

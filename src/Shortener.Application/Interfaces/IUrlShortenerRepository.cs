@@ -10,5 +10,6 @@ public interface IUrlShortenerRepository
     Task<UrlMapping?> GetManagedByShortCodeAsync(Guid tenantId, string shortCode, CancellationToken cancellationToken = default);
     Task<UrlMapping?> GetManagedByOriginalUrlAsync(Guid tenantId, string originalUrl, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<UrlMapping>> GetManagedByTenantAsync(Guid tenantId, CancellationToken cancellationToken = default);
-    Task RecordManagedHitAsync(string mappingId, Guid tenantId, DateTimeOffset timestampUtc, CancellationToken cancellationToken = default);
+    Task<Guid> CaptureManagedClickAsync(string mappingId, Guid tenantId, DateTimeOffset occurredAtUtc,
+        string? traceId, CancellationToken cancellationToken = default);
 }
