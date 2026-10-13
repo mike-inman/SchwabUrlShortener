@@ -407,3 +407,6 @@ article > section { margin-top: 2.75rem; }
   .link-form, .result, .zl-demo { padding: 1.15rem; }
   .zl-chip { font-size: 1rem; }
 }
+
+h1:focus, h1:focus-visible, [tabindex="-1"]:focus, [tabindex="-1"]:focus-visible { outline: none; }
+.btn:focus-visible { outline: 2px solid var(--zl-mint); outline-offset: 3px; }
