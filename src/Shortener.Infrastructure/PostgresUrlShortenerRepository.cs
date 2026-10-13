@@ -43,12 +43,12 @@ public sealed class PostgresUrlShortenerRepository(
             .Where(x => x.Mode == LinkMode.Managed && x.TenantId == tenantId)
             .OrderByDescending(x => x.CreatedAtUtc).ToArrayAsync(cancellationToken), cancellationToken);
 
-    public async Task RecordManagedHitAsync(UrlMapping mapping, DateTimeOffset timestampUtc, CancellationToken cancellationToken = default)
+    public async Task RecordManagedHitAsync(string mappingId, Guid tenantId, DateTimeOffset timestampUtc, CancellationToken cancellationToken = default)
     {
-        if (mapping.Mode != LinkMode.Managed || mapping.TenantId is null)
-            throw new InvalidOperationException("Only managed links can collect analytics.");
+        if (string.IsNullOrWhiteSpace(mappingId) || tenantId == Guid.Empty)
+            throw new ArgumentException("A managed link and tenant are required.");
         var count = await WithDbAsync("RecordManagedHit", db => db.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE url_mappings SET hit_count = hit_count + 1, last_accessed_at_utc = {timestampUtc} WHERE id = {mapping.Id} AND mode = 1 AND tenant_id = {mapping.TenantId}",
+            $"UPDATE url_mappings SET hit_count = hit_count + 1, last_accessed_at_utc = {timestampUtc} WHERE id = {mappingId} AND mode = 1 AND tenant_id = {tenantId}",
             cancellationToken), cancellationToken);
         if (count != 1) throw new InvalidOperationException("Managed link was not found for analytics update.");
     }

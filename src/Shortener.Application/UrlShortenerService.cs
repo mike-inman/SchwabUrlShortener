@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Shortener.Application.Interfaces;
 using Shortener.Domain;
 
@@ -8,12 +10,18 @@ public sealed class UrlShortenerService : IUrlShortenerService
 {
     private const string AllowedChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     private readonly IUrlShortenerRepository _repository;
+    private readonly IRedirectCache _cache;
     private readonly TimeProvider _clock;
+    private readonly ILogger<UrlShortenerService> _logger;
+    private static readonly TimeSpan MaximumCacheTtl = TimeSpan.FromHours(1);
 
-    public UrlShortenerService(IUrlShortenerRepository repository, TimeProvider clock)
+    public UrlShortenerService(IUrlShortenerRepository repository, IRedirectCache cache,
+        TimeProvider clock, ILogger<UrlShortenerService> logger)
     {
         _repository = repository;
+        _cache = cache;
         _clock = clock;
+        _logger = logger;
     }
 
     public async Task<UrlMapping> CreateGuestAsync(string originalUrl, string? requestedShortCode = null, CancellationToken cancellationToken = default)
@@ -49,7 +57,11 @@ public sealed class UrlShortenerService : IUrlShortenerService
             var mapping = tenantId is { } id
                 ? UrlMapping.CreateManaged(normalizedUrl, code, id, now)
                 : UrlMapping.CreateGuest(normalizedUrl, code, now);
-            if (await _repository.TryAddAsync(mapping, cancellationToken)) return new(mapping, AlreadyExists: false);
+            if (await _repository.TryAddAsync(mapping, cancellationToken))
+            {
+                await TryPopulateCacheAsync(RedirectTarget.FromMapping(mapping), cancellationToken);
+                return new(mapping, AlreadyExists: false);
+            }
             if (custom)
             {
                 if (tenantId is { } ownerOnConflict)
@@ -64,14 +76,55 @@ public sealed class UrlShortenerService : IUrlShortenerService
         throw new InvalidOperationException("Could not allocate a unique short code. Try again.");
     }
 
-    public async Task<UrlMapping?> ResolveAsync(string shortCode, CancellationToken cancellationToken = default)
+    public async Task<RedirectTarget?> ResolveAsync(string shortCode, CancellationToken cancellationToken = default)
     {
         if (!UrlValidation.IsValidShortCode(shortCode)) return null;
-        var mapping = await _repository.GetByShortCodeAsync(shortCode.Trim(), cancellationToken);
-        if (mapping is null || mapping.IsExpired(_clock.GetUtcNow())) return null;
-        if (mapping.Mode == LinkMode.Managed)
-            await _repository.RecordManagedHitAsync(mapping, _clock.GetUtcNow(), cancellationToken);
-        return mapping;
+        var code = shortCode.Trim();
+        RedirectTarget? target = null;
+        try
+        {
+            target = await _cache.GetAsync(code, cancellationToken);
+            if (target is not null && !target.IsValidFor(code))
+            {
+                _logger.LogWarning("Redirect cache value invalid; using PostgreSQL. CorrelationId={CorrelationId}", Activity.Current?.Id);
+                target = null;
+            }
+            else
+                _logger.LogInformation("Redirect cache {Outcome}. CorrelationId={CorrelationId}",
+                    target is null ? "miss" : "hit", Activity.Current?.Id);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Redirect cache read failed; using PostgreSQL. ExceptionType={ExceptionType} CorrelationId={CorrelationId}",
+                ex.GetType().Name, Activity.Current?.Id);
+        }
+        if (target is null)
+        {
+            _logger.LogInformation("Redirect PostgreSQL fallback. CorrelationId={CorrelationId}", Activity.Current?.Id);
+            var mapping = await _repository.GetByShortCodeAsync(code, cancellationToken);
+            if (mapping is null) return null;
+            target = RedirectTarget.FromMapping(mapping);
+            if (target.IsExpired(_clock.GetUtcNow())) return null;
+            await TryPopulateCacheAsync(target, cancellationToken);
+        }
+        if (target.IsExpired(_clock.GetUtcNow())) return null;
+        if (target.Mode == LinkMode.Managed)
+            await _repository.RecordManagedHitAsync(target.Id, target.TenantId!.Value, _clock.GetUtcNow(), cancellationToken);
+        return target;
+    }
+
+    private async Task TryPopulateCacheAsync(RedirectTarget target, CancellationToken cancellationToken)
+    {
+        var ttl = target.ExpiresAtUtc is { } expiry
+            ? expiry - _clock.GetUtcNow() : MaximumCacheTtl;
+        if (ttl > MaximumCacheTtl) ttl = MaximumCacheTtl;
+        if (ttl <= TimeSpan.Zero) return;
+        try { await _cache.SetAsync(target, ttl, cancellationToken); }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Redirect cache write failed; PostgreSQL remains authoritative. ExceptionType={ExceptionType} CorrelationId={CorrelationId}",
+                ex.GetType().Name, Activity.Current?.Id);
+        }
     }
 
     public Task<UrlMapping?> GetManagedAsync(Guid tenantId, string shortCode, CancellationToken cancellationToken = default)

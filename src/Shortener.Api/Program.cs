@@ -25,8 +25,13 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddDbContextFactory<ShortenerDbContext>((sp, options) =>
     options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
 builder.Services.AddSingleton<IUrlShortenerRepository, PostgresUrlShortenerRepository>();
+builder.Services.AddSingleton<IRedirectCache>(sp => new RedisRedirectCache(
+    sp.GetRequiredService<IConfiguration>().GetConnectionString("Redis"),
+    sp.GetRequiredService<IConfiguration>()["RedirectCache:Namespace"]));
 builder.Services.AddSingleton<IUrlShortenerService, UrlShortenerService>();
-builder.Services.AddHealthChecks().AddCheck<PostgresHealthCheck>("postgres", tags: ["ready"]);
+builder.Services.AddHealthChecks()
+    .AddCheck<PostgresHealthCheck>("postgres", tags: ["ready"])
+    .AddCheck<RedisHealthCheck>("redis", tags: ["ready"]);
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration, "AzureAd");
 builder.Services.AddAuthorization(options =>
@@ -155,5 +160,15 @@ public sealed class PostgresHealthCheck(IDbContextFactory<ShortenerDbContext> co
             logger.LogWarning("PostgreSQL readiness failed. ExceptionType={ExceptionType}", ex.GetType().Name);
             return HealthCheckResult.Unhealthy("PostgreSQL unavailable.");
         }
+    }
+}
+
+public sealed class RedisHealthCheck(IRedirectCache cache, ILogger<RedisHealthCheck> logger) : IHealthCheck
+{
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        if (await cache.IsAvailableAsync(cancellationToken)) return HealthCheckResult.Healthy();
+        logger.LogWarning("Redis readiness failed; redirect lookup will use PostgreSQL.");
+        return HealthCheckResult.Unhealthy("Redis unavailable.");
     }
 }
