@@ -89,6 +89,9 @@ services:
         PROJECT: src/Shortener.Api/Shortener.Api.csproj
     environment:
       <<: *api_environment
+      LiveUpdates__Mode: Redis
+      LiveUpdates__Channel: shortener:links:v1
+      LiveUpdates__DebounceMilliseconds: "1000"
       ForwardedHeaders__KnownProxyHost: proxy
       DataProtection__Mode: Filesystem
       DataProtection__ApplicationName: Shortener.Api
@@ -117,6 +120,10 @@ services:
       args:
         PROJECT: src/Shortener.Web/Shortener.Web.csproj
     environment:
+      ConnectionStrings__Redis: redis:6379
+      LiveUpdates__Mode: Redis
+      LiveUpdates__Channel: shortener:links:v1
+      LiveUpdates__DebounceMilliseconds: "1000"
       ShortenerApi__BaseUrl: http://api:8080/
       ShortenerApi__AllowedInternalHttpHosts: api
       ShortenerApi__Scope: ${API_SCOPE:-}
@@ -157,6 +164,10 @@ services:
       args:
         PROJECT: src/Shortener.Analytics/Shortener.Analytics.csproj
     environment:
+      ConnectionStrings__Redis: redis:6379
+      LiveUpdates__Mode: Redis
+      LiveUpdates__Channel: shortener:links:v1
+      LiveUpdates__DebounceMilliseconds: "1000"
       ConnectionStrings__ShortenerDb: Host=db;Port=5432;Database=shortener;Username=shortener;Password=${POSTGRES_PASSWORD}
       Kafka__BootstrapServers: kafka:9092
       Kafka__Topic: ${KAFKA_TOPIC:-managed-clicks-v2}

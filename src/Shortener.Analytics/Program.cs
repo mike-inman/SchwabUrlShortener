@@ -1,5 +1,6 @@
 using Shortener.Analytics;
 using Npgsql;
+using Shortener.Infrastructure.LiveUpdates;
 
 namespace Shortener.Analytics;
 
@@ -8,6 +9,7 @@ public static class AnalyticsHost
     public static async Task Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
+        builder.Services.AddLiveUpdates(builder.Configuration);
         builder.Logging.ClearProviders();
         builder.Logging.AddJsonConsole();
         var connectionString = builder.Configuration.GetConnectionString("ShortenerDb");

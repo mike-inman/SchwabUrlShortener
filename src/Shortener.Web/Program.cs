@@ -9,6 +9,7 @@ using Shortener.Shared;
 using Shortener.Web.Components;
 using Shortener.Web.Services;
 using StackExchange.Redis;
+using Shortener.Web.Services.LiveUpdates;
 
 if (args.Contains("--healthcheck", StringComparer.Ordinal))
 {
@@ -24,6 +25,7 @@ if (args.Contains("--healthcheck", StringComparer.Ordinal))
 }
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddLiveUpdates(builder.Configuration);
 var identityMode = builder.Configuration["Identity:Mode"];
 if (!string.IsNullOrWhiteSpace(identityMode) &&
     !string.Equals(identityMode, "Customer", StringComparison.OrdinalIgnoreCase) &&

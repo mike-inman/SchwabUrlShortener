@@ -117,7 +117,11 @@ public sealed class SignOutHttpTests
                 ["AzureAd:Authority"] = "https://idp.example.test/tenant/v2.0",
                 ["AzureAd:ClientSecret"] = "test-only-client-secret",
                 ["ShortenerApi:Scope"] = "api://test/access_as_user",
-                ["ShortenerApi:BaseUrl"] = "https://api.example.test"
+                ["ShortenerApi:BaseUrl"] = "https://api.example.test",
+                ["LiveUpdates:Mode"] = "Redis",
+                ["LiveUpdates:Channel"] = "shortener:links:v1",
+                ["LiveUpdates:DebounceMilliseconds"] = "1000",
+                ["ConnectionStrings:Redis"] = "127.0.0.1:1,abortConnect=false,connectTimeout=100"
             }) builder.UseSetting(setting.Key, setting.Value);
             builder.ConfigureTestServices(services =>
             {

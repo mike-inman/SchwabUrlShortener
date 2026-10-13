@@ -78,6 +78,10 @@ public sealed class CustomerBearerTests
             builder.UseSetting("AzureAd:Instance", "https://schwaburlshortener.ciamlogin.com/");
             builder.UseSetting("AzureAd:TenantId", Tenant);
             builder.UseSetting("AzureAd:ClientId", Audience);
+            builder.UseSetting("LiveUpdates:Mode", "Redis");
+            builder.UseSetting("LiveUpdates:Channel", "shortener:links:v1");
+            builder.UseSetting("ConnectionStrings:Redis", Environment.GetEnvironmentVariable("ConnectionStrings__Redis")
+                ?? "localhost:63652,abortConnect=false");
             builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Identity:Mode"] = "Customer",

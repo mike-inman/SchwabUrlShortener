@@ -14,6 +14,7 @@ using Shortener.Application.Interfaces;
 using Shortener.Domain;
 using Shortener.Infrastructure;
 using Shortener.Shared;
+using Shortener.Infrastructure.LiveUpdates;
 
 if (args.Contains("--healthcheck", StringComparer.Ordinal))
 {
@@ -29,6 +30,7 @@ if (args.Contains("--healthcheck", StringComparer.Ordinal))
 }
 
 var builder = WebApplication.CreateBuilder(args);
+if (!args.Contains("--migrate", StringComparer.Ordinal)) builder.Services.AddLiveUpdates(builder.Configuration);
 
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
@@ -177,13 +179,15 @@ app.MapPost("/api/urls/guest", async (CreateUrlRequest request, IUrlShortenerSer
     catch (ShortCodeConflictException ex) { return Results.Conflict(new ApiError(ex.Message)); }
 }).WithName("CreateGuestLink").AllowAnonymous();
 
-app.MapPost("/api/urls/managed", async (CreateUrlRequest request, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+app.MapPost("/api/urls/managed", async (CreateUrlRequest request, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, ILinkChangePublisher publisher, CancellationToken cancellationToken) =>
 {
     if (customerIdentity) return Results.NotFound();
     if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
     try
     {
         var outcome = await service.CreateManagedWithOutcomeAsync(tenantId, request.OriginalUrl, request.ShortCode, cancellationToken);
+        if (!outcome.AlreadyExists)
+            await publisher.PublishAsync(new LinkChange(LinkChangeScope.Tenant, tenantId, outcome.Mapping.ShortCode), cancellationToken);
         return outcome.AlreadyExists
             ? Results.Ok(ToCreateResponse(outcome.Mapping))
             : Results.Created($"/api/urls/managed/{outcome.Mapping.ShortCode}", ToCreateResponse(outcome.Mapping));
@@ -224,7 +228,7 @@ app.MapGet("/api/urls/managed/analytics", async (ClaimsPrincipal principal, Http
 
 var workspaceManaged = app.MapGroup("/api/workspaces/{workspaceId:guid}/urls/managed").RequireAuthorization();
 workspaceManaged.MapPost("", async (Guid workspaceId, CreateUrlRequest request, ClaimsPrincipal principal,
-    HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
+    HttpContext context, IUrlShortenerService service, ILinkChangePublisher publisher, CancellationToken cancellationToken) =>
 {
     if (!TryGetValidatedIdentity(principal, context, out var issuer, out var subject)) return Results.Forbid();
     try
@@ -232,6 +236,9 @@ workspaceManaged.MapPost("", async (Guid workspaceId, CreateUrlRequest request, 
         var outcome = await service.CreateWorkspaceManagedAsync(issuer, subject, workspaceId,
             request.OriginalUrl, request.ShortCode, cancellationToken);
         if (outcome is null) return Results.NotFound(new ApiError("Workspace not found."));
+        if (!outcome.Value.AlreadyExists)
+            await publisher.PublishAsync(new LinkChange(LinkChangeScope.Workspace, workspaceId,
+                outcome.Value.Mapping.ShortCode), cancellationToken);
         return outcome.Value.AlreadyExists ? Results.Ok(ToCreateResponse(outcome.Value.Mapping))
             : Results.Created($"/api/workspaces/{workspaceId}/urls/managed/{outcome.Value.Mapping.ShortCode}",
                 ToCreateResponse(outcome.Value.Mapping));

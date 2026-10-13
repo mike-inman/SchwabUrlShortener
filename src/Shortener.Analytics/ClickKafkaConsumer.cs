@@ -12,14 +12,17 @@ public sealed class ClickKafkaConsumer : IDisposable
     private readonly IConsumer<string, string> _consumer;
     private readonly PostgresClickEventStore _store;
     private readonly ILogger<ClickKafkaConsumer> _logger;
+    private readonly ILinkChangePublisher _publisher;
     private TopicPartitionOffset? _lastFailure;
     private TopicPartitionOffset? _pendingOffset;
     private int _failureCount;
 
-    public ClickKafkaConsumer(AnalyticsOptions options, PostgresClickEventStore store, ILogger<ClickKafkaConsumer> logger)
+    public ClickKafkaConsumer(AnalyticsOptions options, PostgresClickEventStore store, ILogger<ClickKafkaConsumer> logger,
+        ILinkChangePublisher publisher)
     {
         _store = store;
         _logger = logger;
+        _publisher = publisher;
         _consumer = new ConsumerBuilder<string, string>(options.ConsumerConfig()).Build();
         _consumer.Subscribe(options.Topic);
     }
@@ -57,8 +60,24 @@ public sealed class ClickKafkaConsumer : IDisposable
             _failureCount = 0;
             if (applied) ClickAnalyticsMetrics.Consumed.Add(1); else ClickAnalyticsMetrics.Deduplicated.Add(1);
             RecordLag(result);
-            _logger.LogInformation("Click {Outcome}. EventId={EventId} Version={Version} MappingId={MappingId} TraceId={TraceId}",
-                applied ? "consumed" : "deduplicated", click.EventId, click.Version, click.MappingId, click.TraceId);
+            if (applied)
+            {
+                var change = click switch
+                {
+                    ManagedClickEventV1 v1 => new LinkChange(LinkChangeScope.Tenant, v1.TenantId, v1.ShortCode),
+                    ManagedClickEventV2 v2 => new LinkChange(LinkChangeScope.Workspace, v2.WorkspaceId, v2.ShortCode),
+                    _ => throw new InvalidClickEventException("unsupported_version")
+                };
+                try { await _publisher.PublishAsync(change, cancellationToken); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("Live update publish failed. Scope={Scope} ExceptionType={ExceptionType} TraceId={TraceId}",
+                        change.Scope, ex.GetType().Name, click.TraceId);
+                }
+            }
+            _logger.LogInformation("Click {Outcome}. Scope={Scope} EventId={EventId} Version={Version} MappingId={MappingId} TraceId={TraceId}",
+                applied ? "consumed" : "deduplicated", click.Version == 1 ? "tenant" : "workspace",
+                click.EventId, click.Version, click.MappingId, click.TraceId);
             return applied ? ConsumeOutcome.Applied : ConsumeOutcome.Duplicate;
         }
         catch (Exception ex) when (ex is JsonException or InvalidClickEventException)

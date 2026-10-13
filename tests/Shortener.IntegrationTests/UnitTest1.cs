@@ -158,6 +158,9 @@ public class ShortenerApiTests
         Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.GetAsync("/health/ready")).StatusCode);
         Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync("/api/urls/guest", new { originalUrl = "example.com", shortCode = "noRedis1" })).StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync("/r/noRedis1")).StatusCode);
+        using var managed = ClientFor(factory, TenantA);
+        Assert.Equal(HttpStatusCode.Created, (await managed.PostAsJsonAsync("/api/urls/managed",
+            new { originalUrl = "example.com", shortCode = "noRedis2" })).StatusCode);
     }
 
     [Fact]
@@ -167,11 +170,23 @@ public class ShortenerApiTests
         using var a = ClientFor(factory, TenantA);
         using var b = ClientFor(factory, TenantB);
         using var anon = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+        await using var liveConnection = await ConnectionMultiplexer.ConnectAsync(factory.RedisConnectionString);
+        var notices = new System.Collections.Concurrent.ConcurrentQueue<LinkChange>();
+        var firstNotice = new TaskCompletionSource<LinkChange>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await liveConnection.GetSubscriber().SubscribeAsync(RedisChannel.Literal("shortener:links:v1"), (_, value) =>
+        {
+            if (!LinkChange.TryDeserialize(value.ToString(), out var change)) return;
+            notices.Enqueue(change!);
+            if (change!.ShortCode == "manag123") firstNotice.TrySetResult(change);
+        });
         Assert.Equal(HttpStatusCode.Unauthorized, (await anon.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com" })).StatusCode);
         var created = await a.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com", shortCode = "manag123", tenantId = TenantB });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal(new LinkChange(LinkChangeScope.Tenant, TenantA, "manag123"),
+            await firstNotice.Task.WaitAsync(TimeSpan.FromSeconds(5)));
         var repeatedCode = await a.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com", shortCode = "manag123" });
         Assert.Equal(HttpStatusCode.OK, repeatedCode.StatusCode);
+        Assert.Single(notices);
         Assert.Equal("manag123", (await repeatedCode.Content.ReadFromJsonAsync<CreateUrlResponse>())!.ShortCode);
         var generatedOne = await a.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com" });
         var generatedTwo = await a.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com" });
@@ -327,18 +342,20 @@ public class ShortenerApiTests
         await reader.DisposeAsync();
         Assert.Equal(0, (await owner.GetFromJsonAsync<ManagedUrlResponse>("/api/urls/managed/pipeline1/analytics"))!.HitCount);
 
-        using (var consumer = new ClickKafkaConsumer(options, store, NullLogger<ClickKafkaConsumer>.Instance))
+        var livePublisher = new RecordingLinkChangePublisher();
+        using (var consumer = new ClickKafkaConsumer(options, store, NullLogger<ClickKafkaConsumer>.Instance, livePublisher))
             Assert.Equal(ConsumeOutcome.Applied, await ConsumeUntilAsync(consumer, ConsumeOutcome.Applied));
+        Assert.Equal(new LinkChange(LinkChangeScope.Tenant, TenantA, "pipeline1"), Assert.Single(livePublisher.Changes));
         Assert.Equal(1, (await owner.GetFromJsonAsync<ManagedUrlResponse>("/api/urls/managed/pipeline1/analytics"))!.HitCount);
 
         // Replaying the committed event with a new group and publishing it again both exercise event-ID deduplication.
-        using (var replay = new ClickKafkaConsumer(options with { ConsumerGroup = "schwab-replay-" + Guid.NewGuid().ToString("N") }, store, NullLogger<ClickKafkaConsumer>.Instance))
+        using (var replay = new ClickKafkaConsumer(options with { ConsumerGroup = "schwab-replay-" + Guid.NewGuid().ToString("N") }, store, NullLogger<ClickKafkaConsumer>.Instance, new RecordingLinkChangePublisher()))
             Assert.Equal(ConsumeOutcome.Duplicate, await ConsumeUntilAsync(replay, ConsumeOutcome.Duplicate));
         using (var producer = new ProducerBuilder<string, string>(options.ProducerConfig()).Build())
         {
             await producer.ProduceAsync(topic, new Message<string, string> { Key = click.MappingId, Value = JsonSerializer.Serialize(click with { TenantId = TenantB, EventId = Guid.NewGuid() }) });
         }
-        using (var poison = new ClickKafkaConsumer(options with { ConsumerGroup = "schwab-poison-" + Guid.NewGuid().ToString("N") }, store, NullLogger<ClickKafkaConsumer>.Instance))
+        using (var poison = new ClickKafkaConsumer(options with { ConsumerGroup = "schwab-poison-" + Guid.NewGuid().ToString("N") }, store, NullLogger<ClickKafkaConsumer>.Instance, new RecordingLinkChangePublisher()))
         {
             Assert.Equal(ConsumeOutcome.Duplicate, await ConsumeUntilAsync(poison, ConsumeOutcome.Duplicate));
             Assert.Equal(ConsumeOutcome.DeadLettered, await ConsumeUntilAsync(poison, ConsumeOutcome.DeadLettered));
@@ -379,7 +396,7 @@ public class ShortenerApiTests
 
         var timedConnection = new NpgsqlConnectionStringBuilder(factory.ConnectionString) { CommandTimeout = 1 };
         await using var dataSource = new NpgsqlDataSourceBuilder(timedConnection.ConnectionString).Build();
-        using var consumer = new ClickKafkaConsumer(options, new PostgresClickEventStore(dataSource), NullLogger<ClickKafkaConsumer>.Instance);
+        using var consumer = new ClickKafkaConsumer(options, new PostgresClickEventStore(dataSource), NullLogger<ClickKafkaConsumer>.Instance, new RecordingLinkChangePublisher());
         await using var lockConnection = new NpgsqlConnection(factory.ConnectionString);
         await lockConnection.OpenAsync();
         await using var lockTransaction = await lockConnection.BeginTransactionAsync();
@@ -657,12 +674,12 @@ public class ShortenerApiTests
             using var publisher = new ClickOutboxPublisher(dataSource, options, NullLogger<ClickOutboxPublisher>.Instance);
             Assert.Equal(PublishOutcome.Published, await publisher.PublishOneAsync());
             Assert.Equal(PublishOutcome.Published, await publisher.PublishOneAsync());
-            using (var consumer = new ClickKafkaConsumer(options, store, NullLogger<ClickKafkaConsumer>.Instance))
+            using (var consumer = new ClickKafkaConsumer(options, store, NullLogger<ClickKafkaConsumer>.Instance, new ThrowingLinkChangePublisher()))
             {
                 Assert.Equal(ConsumeOutcome.Duplicate, await ConsumeUntilAsync(consumer, ConsumeOutcome.Duplicate));
                 Assert.Equal(ConsumeOutcome.Applied, await ConsumeUntilAsync(consumer, ConsumeOutcome.Applied));
             }
-            using (var replay = new ClickKafkaConsumer(options with { ConsumerGroup = "schwab-workspace-replay-" + Guid.NewGuid().ToString("N") }, store, NullLogger<ClickKafkaConsumer>.Instance))
+            using (var replay = new ClickKafkaConsumer(options with { ConsumerGroup = "schwab-workspace-replay-" + Guid.NewGuid().ToString("N") }, store, NullLogger<ClickKafkaConsumer>.Instance, new RecordingLinkChangePublisher()))
             {
                 Assert.Equal(ConsumeOutcome.Duplicate, await ConsumeUntilAsync(replay, ConsumeOutcome.Duplicate));
                 Assert.Equal(ConsumeOutcome.Duplicate, await ConsumeUntilAsync(replay, ConsumeOutcome.Duplicate));
@@ -725,6 +742,9 @@ public class ShortenerApiTests
         {
             builder.UseSetting("DataProtection:Mode", "Filesystem");
             builder.UseSetting("DataProtection:ApplicationName", "Shortener.Api");
+            builder.UseSetting("LiveUpdates:Mode", "Redis");
+            builder.UseSetting("LiveUpdates:Channel", "shortener:links:v1");
+            builder.UseSetting("ConnectionStrings:Redis", _unavailableRedis ? "127.0.0.1:1,abortConnect=false" : RedisConnectionString);
             var apiConnectionString = ConnectionString;
             if (_unavailableDatabase)
             {
@@ -738,6 +758,9 @@ public class ShortenerApiTests
                 ["DataProtection:ApplicationName"] = "Shortener.Api",
                 ["ConnectionStrings:ShortenerDb"] = apiConnectionString,
                 ["ConnectionStrings:Redis"] = _unavailableRedis ? "127.0.0.1:1,abortConnect=false" : RedisConnectionString,
+                ["LiveUpdates:Mode"] = "Redis",
+                ["LiveUpdates:Channel"] = "shortener:links:v1",
+                ["LiveUpdates:DebounceMilliseconds"] = "1000",
                 ["RedirectCache:Namespace"] = RedisNamespace
             }));
             builder.ConfigureTestServices(services =>
@@ -760,6 +783,22 @@ public class ShortenerApiTests
         private DateTimeOffset _now = new(2026, 10, 12, 12, 0, 0, TimeSpan.Zero);
         public override DateTimeOffset GetUtcNow() => _now;
         public void Advance(TimeSpan delta) => _now += delta;
+    }
+
+    private sealed class RecordingLinkChangePublisher : ILinkChangePublisher
+    {
+        public List<LinkChange> Changes { get; } = [];
+        public Task PublishAsync(LinkChange change, CancellationToken cancellationToken = default)
+        {
+            Changes.Add(change);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingLinkChangePublisher : ILinkChangePublisher
+    {
+        public Task PublishAsync(LinkChange change, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("test publisher failure");
     }
 
     // Test-only authentication replaces bearer validation inside WebApplicationFactory.
