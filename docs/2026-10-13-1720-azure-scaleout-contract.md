@@ -1,6 +1,6 @@
 # Azure scale-out contract — 2026-10-13 17:20 CDT
 
-Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts`. **Revised 18:50 CDT: replaced the staging design with one lean, scalable environment** (no staging, no Front Door, no private endpoints, Burstable PostgreSQL, Redis as a container, `rg-schwab-url-shortener`). Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. **Revised 19:00 CDT: restored low-cost design controls** — PostgreSQL VNet integration (no public endpoint), Redis persistence, monitoring alerts and diagnostics, and an automated Kafka-lag scale demonstration. **Revised 19:05 CDT**: PostgreSQL pool size set to 2 for the 35-connection B1ms limit. **Revised 19:10 CDT**: design principles added; Event Hubs auto-inflate removed in favor of a fixed 1 throughput unit plus a throughput alert. **Revised 19:15 CDT**: Entra identity settings added, with the Web client secret stored in Key Vault; secret-handling rules stated. **Revised 19:20 CDT**: one managed identity per service, with per-secret Key Vault access. **Revised 19:35 CDT**: Well-Architected review (`2026-10-13-1930-well-architected-review.md`) adopted; new Tracks D (application hardening) and F (CI/CD) added. **Revised 19:50 CDT**: API identity no longer reads `eventhubs-connection` (least privilege; the API never uses Kafka). **Revised 20:10 CDT**: Key Vault `bypass: AzureServices` so Resource Manager can create keys during deployment. **Revised 21:50 CDT**: subscription upgraded to Pay-As-You-Go. Change this file only by editing it and telling every active track.
+Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts`. **Revised 18:50 CDT: replaced the staging design with one lean, scalable environment** (no staging, no Front Door, no private endpoints, Burstable PostgreSQL, Redis as a container, `rg-schwab-url-shortener`). Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. **Revised 19:00 CDT: restored low-cost design controls** — PostgreSQL VNet integration (no public endpoint), Redis persistence, monitoring alerts and diagnostics, and an automated Kafka-lag scale demonstration. **Revised 19:05 CDT**: PostgreSQL pool size set to 2 for the 35-connection B1ms limit. **Revised 19:10 CDT**: design principles added; Event Hubs auto-inflate removed in favor of a fixed 1 throughput unit plus a throughput alert. **Revised 19:15 CDT**: Entra identity settings added, with the Web client secret stored in Key Vault; secret-handling rules stated. **Revised 19:20 CDT**: one managed identity per service, with per-secret Key Vault access. **Revised 19:35 CDT**: Well-Architected review (`2026-10-13-1930-well-architected-review.md`) adopted; new Tracks D (application hardening) and F (CI/CD) added. **Revised 19:50 CDT**: API identity no longer reads `eventhubs-connection` (least privilege; the API never uses Kafka). **Revised 20:10 CDT**: Key Vault `bypass: AzureServices` so Resource Manager can create keys during deployment. **Revised 21:50 CDT**: subscription upgraded to Pay-As-You-Go. **Revised 23:20 CDT**: identity corrected to customer mode (External ID, Ziplio) instead of workforce. Change this file only by editing it and telling every active track.
 
 ## Purpose
 
@@ -127,19 +127,29 @@ All settings use .NET double-underscore environment variable form. Every mode sw
 | `AzureAd__ClientId` (API and migrate job) | private env file | `API_CLIENT_ID` from the `azd` environment: `34d681eb-4c10-402d-b1dd-1b02ad2d8d89` |
 | `AZURE_CLIENT_ID` | unset | client ID of the app's user-assigned managed identity |
 
-### Identity (Entra)
+### Identity (Entra External ID — customer mode)
 
-Azure runs `Identity__Mode=Workforce` by default, using the existing registrations in tenant `mediaraq com`. Customer (External ID) mode is a separate, later choice, because the Web app runs one identity mode per deployment.
+**Corrected 23:20 CDT.** Azure runs `Identity__Mode=Customer`, the Ziplio customer path already built and validated locally (`docs/2026-10-13-1152-customer-identity-integration-validation.md`, `docs/2026-10-13-1205-customer-local-compose-cutover-validation.md`, branding, sign-out, and token-acquisition records). Sign-in, sign-up, and branding come from the existing External ID tenant and its user flow; nothing is rebuilt. The earlier Workforce default was an error; customer mode lets evaluators self-register without their own organization's consent. Customer mode disables the workforce-only API routes by design.
+
+External ID tenant: `schwaburlshortener.onmicrosoft.com`, tenant ID `6adc36e9-dfe5-469f-8aed-6ef83abcdd19`, authority host `schwaburlshortener.ciamlogin.com`.
 
 | Setting | App | Azure value |
 |---|---|---|
-| `Identity__Mode` | Web | `Workforce` |
-| `AzureAd__Instance` | Web | `https://login.microsoftonline.com/` |
-| `AzureAd__TenantId` | API, Web, migrate | `organizations` |
-| `AzureAd__ClientId` | API, migrate | `API_CLIENT_ID` = `34d681eb-4c10-402d-b1dd-1b02ad2d8d89` (SchwabUrlShortener API) |
-| `AzureAd__ClientId` | Web | `WEB_CLIENT_ID` = `d4cd63a0-5583-41ad-a640-803ea76bb3a8` (SchwabUrlShortener Web) |
-| `AzureAd__ClientSecret` | Web | Key Vault secret `web-client-secret`, written by Bicep from the secure `azd` value `WEB_CLIENT_SECRET` |
-| `ShortenerApi__Scope` | Web | `api://34d681eb-4c10-402d-b1dd-1b02ad2d8d89/access_as_user` |
+| `Identity__Mode` | API, Web, migrate | `Customer` |
+| `AzureAd__Instance` | API, migrate | `https://schwaburlshortener.ciamlogin.com/` |
+| `AzureAd__TenantId` | API, Web, migrate | `6adc36e9-dfe5-469f-8aed-6ef83abcdd19` |
+| `AzureAd__ClientId` | API, migrate | `8911f6b3-365c-4ce5-a0f7-d12b2e4f230a` (customer API registration) |
+| `AzureAd__Authority` | Web | `https://schwaburlshortener.ciamlogin.com/6adc36e9-dfe5-469f-8aed-6ef83abcdd19/v2.0` |
+| `AzureAd__ClientId` | Web | `93f2f816-0a95-41e0-b7df-7ca3c0cce8a0` (customer Web registration) |
+| `AzureAd__ClientSecret` | Web | Key Vault secret `web-client-secret`, written from the secure `azd` value `WEB_CLIENT_SECRET`, which must be a secret of the **customer** Web registration |
+| `AzureAd__CallbackPath` / `AzureAd__SignedOutCallbackPath` | Web | `/signin-oidc` / `/signout-callback-oidc` |
+| `ShortenerApi__Scope` | Web | `api://8911f6b3-365c-4ce5-a0f7-d12b2e4f230a/access_as_user` |
+
+Redirect URIs for the public host belong on the **customer** Web registration (`93f2f816…`) in the External ID tenant. The workforce registrations (`d4cd63a0…`, `34d681eb…`) in tenant `mediaraq com` are not used by Azure: remove the Azure redirect URIs added to `d4cd63a0…` at 23:02 and its "SchwabUrlShortener Azure prod" secret once customer sign-in works in Azure.
+
+Entra operations against the External ID tenant use a separate Azure CLI profile (`AZURE_CONFIG_DIR=$HOME/.azure-ziplio`, `az login --tenant 6adc36e9-dfe5-469f-8aed-6ef83abcdd19 --allow-no-subscriptions`), so the default CLI login used for Azure resources in subscription `baaf4acd…` is never switched.
+
+Federated credential (S4): the Web managed identity lives in tenant `mediaraq com` while the customer registration lives in the External ID tenant. Track C checks whether a cross-tenant managed-identity federated credential is supported for this single-tenant customer registration; if not, the Key Vault secret remains and the reason is recorded.
 
 ### Secret handling
 
@@ -267,8 +277,7 @@ The Analytics worker serves `GET /health/live` and `GET /health/ready` on port `
 - `az login` and `azd auth login` as `social@mediaraq.com` (done 2026-10-13).
 - Owner on the subscription (confirmed 2026-10-13).
 - `POSTGRES_PASSWORD` in the `azd` environment; Track C copies it from the deleted staging environment's local file without displaying it.
-- Set `WEB_CLIENT_SECRET` in the `azd` environment from the private file used locally (never in chat). If that secret has expired, create a new one on the SchwabUrlShortener Web registration under **Certificates & secrets**.
-- Entra redirect URIs for the public host on the **SchwabUrlShortener Web** registration (`d4cd63a0-5583-41ad-a640-803ea76bb3a8`).
+- Sign in once to the External ID tenant in the separate CLI profile, so the customer Web secret and redirect URIs can be set by script without the portal.
 - Upgrade the free trial to Pay-As-You-Go before it ends.
 - After sign-in works: sign in once and create one managed demo link for the scale demonstration (Track C names the short code it needs).
 - Optional: a custom domain and DNS records.
