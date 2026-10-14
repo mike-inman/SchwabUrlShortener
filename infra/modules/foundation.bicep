@@ -25,7 +25,7 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     softDeleteRetentionInDays: 90
     publicNetworkAccess: 'Enabled'
     networkAcls: {
-      bypass: 'None'
+      bypass: 'AzureServices'
       defaultAction: 'Deny'
       virtualNetworkRules: [ { id: acaSubnetId } ]
       ipRules: empty(operatorPublicIp) ? [] : [ { value: operatorPublicIp } ]
