@@ -210,7 +210,7 @@ jobs:
           PROJECT: ${{ matrix.project }}
         run: |
           set -euo pipefail
-          docker build --target "$TARGET" --build-arg "PROJECT=$PROJECT" --tag "shortener-$TARGET:ci" .
+          docker build --pull --target "$TARGET" --build-arg "PROJECT=$PROJECT" --tag "shortener-$TARGET:ci" .
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: shortener-${{ matrix.target }}:ci

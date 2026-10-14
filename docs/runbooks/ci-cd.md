@@ -37,8 +37,6 @@ az role assignment create --assignee-object-id "$principal_id" --assignee-princi
   --role Reader --scope "$group_id" --output none
 az role assignment create --assignee-object-id "$principal_id" --assignee-principal-type ServicePrincipal \
   --role AcrPush --scope "$acr_id" --output none
-az role assignment create --assignee-object-id "$principal_id" --assignee-principal-type ServicePrincipal \
-  --role 'Container Registry Tasks Contributor' --scope "$acr_id" --output none
 for app in ca-shortener-api ca-shortener-analytics ca-shortener-web; do
   app_id=$(az containerapp show -g "$group" -n "$app" --query id -o tsv)
   az role assignment create --assignee-object-id "$principal_id" --assignee-principal-type ServicePrincipal \
@@ -50,7 +48,7 @@ az role assignment create --assignee-object-id "$principal_id" --assignee-princi
 printf 'Deployment identity client ID: %s\n' "$client_id"
 ```
 
-`AcrPush` permits image writes and digest lookup. ACR Tasks Contributor permits `az acr build` (`scheduleRun/action` and build source upload); AcrPush alone does not. Container Apps Contributor permits the three app updates, scoped to those resources. The separate Jobs Contributor role permits updating and starting the one migration job; Container Apps Contributor does not grant `jobs/start`. Reader at resource-group scope supports discovery. These are the narrowest relevant built-in roles found through `az role definition list` on 2026-10-14. No Key Vault, Graph, Owner, or User Access Administrator role is assigned. Verify actual scope and assignments after creation.
+`AcrPush` permits Docker login, image push, and digest lookup. Container Apps Contributor permits the three app updates, scoped to those resources. The separate Jobs Contributor role permits updating and starting the one migration job; Container Apps Contributor does not grant `jobs/start`. Reader at resource-group scope supports discovery. These are the narrowest relevant built-in roles found through `az role definition list` on 2026-10-14. No Key Vault, Graph, Owner, or User Access Administrator role is assigned. Verify actual scope and assignments after creation.
 
 ## Reviewed GitHub setup — after the repository is public
 
@@ -65,8 +63,8 @@ The script refuses a private repository, creates `production` with `mike-inman` 
 ## Deployment and approval
 
 1. Merge a fully green PR to `main` only after checking the listed gates. `workflow_run` queues application deployment when that push's CI completes successfully. A `pull_request`, fork, failed CI, stale `main` SHA, or non-main manual dispatch cannot deploy.
-2. Open **Actions → Deploy production** for the run. Review the commit and release intent, then Michael approves the `production` environment request. Approval happens before Azure login, ACR builds, migrations, and app updates.
-3. The job records the current API, Analytics, Web, and migration job digests; builds three images with Dockerfile targets in ACR; resolves immutable digests; updates and runs the migration job; updates API, Analytics, then Web, waiting up to ten minutes for each new revision to be Running and Healthy; and checks public liveness, readiness, guest create and redirect, www-to-apex redirect, and favicon. The step summary records commit, digests, revision names, smoke results, and rollback status. Migration execution names and status are reported without job logs.
+2. Open **Actions → Deploy production** for the run. Review the commit and release intent, then Michael approves the `production` environment request. Approval happens before Azure login, image builds, migrations, and app updates.
+3. The job records the current API, Analytics, Web, and migration job digests; builds three Dockerfile targets with `docker build --pull`, pushes them to ACR, and resolves immutable digests. The Dockerfile pins the .NET 10.0.13 base-image digests; `--pull` still checks the registry for those pinned images. It then updates and runs the migration job; updates API, Analytics, then Web, waiting up to ten minutes for each new revision to be Running and Healthy; and checks public liveness, readiness, guest create and redirect, www-to-apex redirect, and favicon. The step summary records commit, digests, revision names, smoke results, and rollback status. Migration execution names and status are reported without job logs.
 4. Migrations must be backward-compatible: expand first, deploy compatible code, contract only in a later separately reviewed release. A failed migration blocks app updates and restores the previous **job image**. A failed app update or smoke check restores the previous application and job digests; it never automatically reverses database schema changes. The workflow remains failed even if image rollback succeeds.
 
 For a deliberate rollback drill, use **Run workflow** on `main` with `smoke_expect_fail=true` only after Michael approves the production run. The script performs the normal public checks, then fails intentionally; the rollback step must restore the recorded previous digests. Inspect the step summary and Azure revision image references afterward. The input is restricted to manual dispatch and is retained only as a documented test switch.
