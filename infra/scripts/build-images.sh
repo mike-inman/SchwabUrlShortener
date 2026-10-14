@@ -18,7 +18,9 @@ fi
 # particular, the local azd environment under .azure/ must never be uploaded.
 build_context=$(mktemp -d)
 trap 'rm -rf "$build_context"' EXIT HUP INT TERM
-git archive HEAD Dockerfile src | tar -x -C "$build_context"
+source_ref=${IMAGE_SOURCE_REF:-HEAD}
+source_commit=$(git rev-parse --verify "${source_ref}^{commit}")
+git archive "$source_commit" Dockerfile src | tar -x -C "$build_context"
 
 registry=${AZURE_CONTAINER_REGISTRY_NAME:-}
 if [ -z "$registry" ]; then
@@ -29,7 +31,7 @@ if [ -z "$registry" ]; then
   exit 2
 fi
 
-revision=$(git rev-parse --short=12 HEAD)
+revision=$(git rev-parse --short=12 "$source_commit")
 build_one() {
   stage=$1
   project=$2
