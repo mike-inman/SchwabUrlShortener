@@ -230,7 +230,7 @@ I used two AI coding agents. **Claude** (Anthropic) handled planning, architectu
 | Integration (real PostgreSQL, Redis, Kafka) | API contract, uniqueness races, workspace isolation, outbox to Kafka to aggregate, trace propagation, rate limiting, insights privacy and 100,000-click scale read | 39/39 |
 | Compose startup matrix | Five deployment variants start healthy as non-root | 5/5 |
 | Load and fault (Slice 7) | Bounded local load; Redis, Kafka and PostgreSQL interruptions | No errors in the recorded cases ([closeout](2026-10-13-1441-slice-7-scale-validation-closeout.md)) |
-| Live (Azure) | TLS on ziplio.io and www; guest create and redirect; customer sign-in to the dashboard | Observed manually 2026-10-14 |
+| Live (Azure) | TLS on ziplio.io and www; guest create and redirect; customer sign-in and sign-out; dashboard; Insights charts | Accepted in a browser 2026-10-14 ([screenshots](#live-acceptance-screenshots)) |
 | CI (GitHub Actions) | Build, vulnerability gate, all test layers, host startup, Bicep, gitleaks, Trivy | [Green on `main`](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38593373498) |
 
 The latest full run (151/151) is from the [Track G validation](2026-10-14-0952-track-g-link-insights-validation.md); the same suite runs in [CI on `main`](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38598938398).
@@ -250,6 +250,18 @@ The latest full run (151/151) is from the [Track G validation](2026-10-14-0952-t
 | Vulnerable dependencies | Medium / High | Vulnerability gate fails the build; Dependabot (arriving with Track F) | `514bf64` remediation | — |
 | Cost overrun | Medium / Medium | $100 budget alert; Log Analytics capped at 1 GB/day; scale-to-minimum; 0.25 telemetry sampling | Azure budget and cap | — |
 | Accidental deletion | Low / High | `CanNotDelete` lock on the resource group; Key Vault purge protection | Lock is active | — |
+
+### Live acceptance screenshots
+
+Taken on <https://ziplio.io> on 2026-10-14, before the UI polish release.
+
+| Guest link (home) | Signed-in dashboard |
+| --- | --- |
+| ![Ziplio home page with the guest link form](images/home-guest-link.png) | ![Managed links dashboard with redirect counts and 7-day sparklines](images/dashboard.png) |
+
+| Link Insights | Branded Entra External ID sign-out | 
+| --- | --- |
+| ![Insights page with clicks, visitors, busiest hour, clicks over time, referrers and devices](images/insights.png) | ![Ziplio-branded Microsoft Entra External ID sign-out page](images/branded-sign-out.png) <br> ![Ziplio signed-out page](images/signed-out.png) |
 
 ---
 
@@ -443,6 +455,8 @@ Everything is in [`infra/`](../infra/README.md), which has the full procedure. I
 | No malicious-URL screening for guest links | Possible phishing abuse | URL reputation API at create time, plus abuse reporting |
 | No link editing, deletion, custom domains, or QR codes | Feature scope | Product backlog |
 | Dead-lettered click events need manual replay | An operator must step in | Replay tool or admin endpoint |
+| **Known issue (under investigation):** in one manual test, the dashboard redirect count appeared to lag behind a click | Display only; clicks, redirects and Insights totals are correct | Production traces show the update path firing within about 3 seconds (click → live hint 0.9 s → dashboard re-fetch 2.6 s), and the worker commits before it publishes. Several dashboard and Insights tabs were open, so the stale view is being reproduced before any code change. |
+| Dashboard dates are shown in UTC while Insights uses local time | Minor inconsistency | Localize dashboard times in the UI polish release |
 | Scale demonstration under load in Azure | ⏳ Pending Track C P3 | — |
 | Local load test is a baseline, not a capacity number | 40 requests per case at concurrency 4 on one machine | Azure load test with the P3 demo |
 
@@ -487,12 +501,13 @@ The traceability table in [Section 4](#4-ai-assisted-execution) shows where AI o
 
 **What comes next:** the [product roadmap](ROADMAP.md) plans **QR codes** with scan-versus-click tracking, an **MCP server** that exposes shortening and Insights as tools for AI agents (with API Management once API keys exist), and an in-app **Ziplio Assistant** built on those same tools. Platform work continues with Front Door and WAF, URL screening, PostgreSQL HA, staged rollouts, and a measured Azure scale test.
 
-**Engineer sign-off.** ⏳ To be completed at submission: final commit hash, CI run link, bundle verification, and date.
+**Engineer sign-off.** I reviewed the submitted repository, the live deployment and the evidence above. The prototype meets the assignment's requirements and deliverables, with the limitations and in-progress items stated in [Section 10](#10-testing-limitations-and-trade-offs).
 
 | Item | Value |
 | --- | --- |
-| Final commit | ⏳ |
-| CI run | ⏳ |
-| Public repository | <https://github.com/mike-inman/SchwabUrlShortener> (⏳ made public at submission) |
-| Bundle | `michael-inman.bundle`, verified with `git bundle verify` (⏳) |
-| Signed | Michael Inman, ⏳ date |
+| Submitted commit | `1763c1e` on `main` (the commit in the submitted bundle) |
+| CI on that commit | [Green on `main`](https://github.com/mike-inman/SchwabUrlShortener/actions?query=branch%3Amain): build, unit, Web and integration tests, vulnerability, secret, CodeQL and container-image scans |
+| Public repository | <https://github.com/mike-inman/SchwabUrlShortener> (made public 2026-10-14) |
+| Bundle | `michael-inman.bundle`, built from a fresh clone of the public repository; `git bundle verify` passed; a clone of it contains no private files |
+| Live system | <https://ziplio.io>, accepted in a browser on 2026-10-14 ([screenshots](#live-acceptance-screenshots)) |
+| Signed | Michael Inman, 2026-10-14 |
