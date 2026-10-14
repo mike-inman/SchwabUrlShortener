@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Blazor-ApexCharts" Version="7.0.0" />
     <ProjectReference Include="..\Shortener.Application\Shortener.Application.csproj" />
     <PackageReference Include="Microsoft.Identity.Web" Version="4.16.0" />
     <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.5.4" />

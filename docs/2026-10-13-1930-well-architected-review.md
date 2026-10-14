@@ -66,6 +66,7 @@ Priority:
 | P1 | Metrics and traces are defined in code but not exported; Application Insights is configured with nothing sending to it; Slice 7 recorded per-event trace correlation as unverified | Implemented conditional Azure Monitor export and W3C context through outbox/Kafka in Track D. Disposable integration trace verified; actual Application Insights ingestion and one live Azure trace remain unverified. | Within the 1 GB/day log cap | P0 | Track D — local verified, Azure pending |
 | P2 | No single view for evaluators | An Azure Monitor workbook: request rate, latency, errors, replica counts per app, consumer lag, outbox age, database CPU and connections | Free | P1 | Track C |
 | P3 | Sampling not configured | Added configurable sampling, default 1.0 locally and recommended 0.25 in Azure pending ingestion review against the daily cap. | Free | P0 | Track D — configured, Azure pending |
+| P4 | Insights click collection adds a privacy and rollout boundary | Track G stores coarse dimensions and a daily keyed visitor hash, clears hashes after 35 days, and exposes workspace-scoped reads. Track C must deploy the Key Vault secret and API reference and run the migration before serving new API images; the workbook should show the existing consumer, duplicate, and outbox-age signals. Live Azure ingestion and retention operation remain unverified. | Within existing database and telemetry allocation | P0 | Tracks G/C — local verification, Azure pending |
 
 ### Cost optimization
 
@@ -79,7 +80,8 @@ No new gaps beyond the contract. Add to `infra/README.md`: a cost table per reso
 | B — live push | Fixing throttle, then rebase and merge | None |
 | C — Azure environment | P1 discovery | S5, S6, R1, R2, R3, O2, O4, P2, and the infrastructure half of S4 |
 | D — application hardening (new) | Local implementation and verification complete; Azure and signed-in browser acceptance pending | S1, S2, S3, P1, P3 |
-| F — CI/CD (new) | Locally validated 2026-10-13 19:52 CDT; remote validation pending | O1, O3; deploy requires Track C P2 |
+| F — CI/CD (new) | Locally validated 2026-10-13 19:52 CDT; merged to main 2026-10-14 | O1, O3; deploy requires Track C P2 |
+| G — link Insights | Local implementation and disposable-stack verification in progress, 2026-10-14 | P4; Azure rollout and signed-in browser acceptance depend on Track C |
 
 ## Decisions recorded
 

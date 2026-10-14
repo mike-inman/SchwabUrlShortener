@@ -99,6 +99,7 @@ public sealed class HardeningHttpTests
             builder.UseSetting("ConnectionStrings:ShortenerDb", "Host=127.0.0.1;Port=1;Database=Schwab_test_local;Username=test;Timeout=1");
             builder.UseSetting("ConnectionStrings:Redis", "127.0.0.1:1");
             builder.UseSetting("PublicLinks:BaseUrl", "https://example.test/");
+            builder.UseSetting("VisitorHash:DailySecret", "integration-test-secret-not-a-real-value");
             builder.UseSetting("RateLimiting:GuestCreate:PermitLimit", "1");
             builder.UseSetting("RateLimiting:Redirect:TokenLimit", "1");
             builder.UseSetting("RateLimiting:Redirect:TokensPerPeriod", "1");

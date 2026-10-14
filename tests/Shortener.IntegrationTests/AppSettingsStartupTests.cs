@@ -40,6 +40,7 @@ public sealed class AppSettingsStartupTests
             builder.UseSetting("AzureAd:ClientId", "11111111-1111-1111-1111-111111111111");
             builder.UseSetting("ConnectionStrings:ShortenerDb", "Host=localhost;Database=Schwab_test_local;Username=test");
             builder.UseSetting("ConnectionStrings:Redis", "localhost:6379");
+            builder.UseSetting("VisitorHash:DailySecret", "integration-test-secret-not-a-real-value");
         }
     }
 }

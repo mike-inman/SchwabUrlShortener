@@ -17,6 +17,17 @@ namespace Shortener.WebTests;
 
 public sealed class ComponentTests : BunitContext
 {
+    [Fact]
+    public void Heatmap_conversion_merges_repeated_local_hour_at_fall_back()
+    {
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        var counts = InsightsTime.ByLocalWeekdayHour([
+            new(new DateTimeOffset(2026, 11, 1, 5, 0, 0, TimeSpan.Zero), 2),
+            new(new DateTimeOffset(2026, 11, 1, 6, 0, 0, TimeSpan.Zero), 3)
+        ], zone);
+        Assert.Equal(5, counts[(6, 1)]);
+    }
+
     private static readonly Guid Tenant = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
     private readonly FakeLiveUpdates liveUpdates = new();
     private static readonly CreatedLink Created = new("abc", "https://example.com", "/r/abc",
@@ -356,6 +367,98 @@ public sealed class ComponentTests : BunitContext
         Assert.Equal(team.Id, api.WorkspaceReads.Last());
     }
 
+    [Fact]
+    public void Dashboard_batches_sparklines_for_all_rows()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup(customer: true);
+        var personal = new WorkspaceSummary(Guid.NewGuid(), "Personal", 0);
+        api.Workspaces = _ => Task.FromResult<IReadOnlyList<WorkspaceSummary>>([personal]);
+        api.WorkspaceList = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed, Managed with { ShortCode = "second" }]);
+        api.Sparklines = _ => Task.FromResult<IReadOnlyList<LinkSparkline>>([
+            new("abc", [new(DateTimeOffset.UtcNow, 1), new(DateTimeOffset.UtcNow.AddDays(1), 2)]),
+            new("second", [new(DateTimeOffset.UtcNow, 3), new(DateTimeOffset.UtcNow.AddDays(1), 1)])]);
+        var view = Render<Dashboard>();
+        view.WaitForAssertion(() => Assert.Equal(2, view.FindAll("svg.insights-sparkline").Count));
+        Assert.Single(api.SparklineReads);
+        Assert.Equal(personal.Id, api.SparklineReads[0]);
+        Assert.Equal(2, view.FindAll("a[href$='/insights']").Count);
+    }
+
+    [Fact]
+    public void Insights_empty_state_uses_selected_workspace_and_shows_tiles()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup(customer: true);
+        var personal = new WorkspaceSummary(Guid.NewGuid(), "Personal", 0);
+        Func<Guid, Task> dashboardSelection = _ => Task.CompletedTask;
+        var navigation = Services.GetRequiredService<WorkspaceNavigationState>();
+        navigation.Configure([personal], personal.Id, dashboardSelection);
+        navigation.Clear(dashboardSelection);
+        Assert.Equal(personal.Id, navigation.SelectedId);
+        api.InsightsData = (id, range) =>
+        {
+            Assert.Equal(personal.Id, id);
+            Assert.Equal("7d", range);
+            return Task.FromResult(new LinkInsights(0, 0, 0, [], [], [], null, []));
+        };
+        JSInterop.Mode = JSRuntimeMode.Loose;
+        var view = Render<Insights>(parameters => parameters.Add(x => x.ShortCode, "abc"));
+        view.WaitForAssertion(() => Assert.Contains("No clicks yet", view.Markup));
+        Assert.Equal(4, view.FindAll(".insights-tile h2").Count);
+        Assert.Contains("Insights excludes detected bots", view.Markup);
+    }
+
+    [Fact]
+    public void Insights_refreshes_for_selected_workspace_signal()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup(customer: true);
+        var workspace = new WorkspaceSummary(Guid.NewGuid(), "Personal", 0);
+        Services.GetRequiredService<WorkspaceNavigationState>().Configure([workspace], workspace.Id, _ => Task.CompletedTask);
+        var reads = 0;
+        api.InsightsData = (id, _) =>
+        {
+            Assert.Equal(workspace.Id, id);
+            reads++;
+            return Task.FromResult(new LinkInsights(0, 0, 0, [], [], [], null, []));
+        };
+        JSInterop.Mode = JSRuntimeMode.Loose;
+        var view = Render<Insights>(parameters => parameters.Add(x => x.ShortCode, "abc"));
+        view.WaitForAssertion(() => Assert.Equal(1, reads));
+        view.WaitForAssertion(() => Assert.Equal(1, liveUpdates.SubscriptionCount));
+        liveUpdates.Signal(LinkChangeScope.Workspace, Guid.NewGuid());
+        Assert.Equal(1, reads);
+        liveUpdates.Signal(LinkChangeScope.Workspace, workspace.Id);
+        view.WaitForAssertion(() => Assert.Equal(2, reads), TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public void Insights_renders_charts_and_accessible_summaries_with_clicks()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup(customer: true);
+        var workspace = new WorkspaceSummary(Guid.NewGuid(), "Personal", 0);
+        Services.GetRequiredService<WorkspaceNavigationState>().Configure([workspace], workspace.Id, _ => Task.CompletedTask);
+        var bucket = new DateTimeOffset(2026, 10, 14, 9, 0, 0, TimeSpan.Zero);
+        api.InsightsData = (_, _) => Task.FromResult(new LinkInsights(3, 1, 2,
+            [new InsightPoint(bucket, 3)], [new InsightGroup("Direct", 3)],
+            [new InsightGroup("Desktop", 3)], new InsightLastClick(bucket, "Direct", "Desktop"),
+            [new InsightPoint(bucket, 3)]));
+        JSInterop.Mode = JSRuntimeMode.Loose;
+        JSInterop.SetupModule("./insights.js");
+        var view = Render<Insights>(parameters => parameters.Add(x => x.ShortCode, "abc"));
+        Assert.True(view.Markup.Contains("Clicks over time", StringComparison.Ordinal), view.Markup);
+        Assert.Equal(4, view.FindAll(".insights-tile h2").Count);
+        Assert.Contains("visually-hidden", view.Markup);
+        Assert.Contains("Top referrers", view.Markup);
+        Assert.Contains("When your audience clicks", view.Markup);
+    }
+
     private FakeApi Setup(bool customer = false)
     {
         var api = new FakeApi();
@@ -364,6 +467,7 @@ public sealed class ComponentTests : BunitContext
         Services.AddSingleton(new WorkspaceNavigationState());
         Services.AddSingleton(NullLogger<Home>.Instance);
         Services.AddSingleton(NullLogger<Dashboard>.Instance);
+        Services.AddSingleton(NullLogger<Insights>.Instance);
         Services.AddSingleton<ILinkChangeSubscriber>(liveUpdates);
         Services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?> { ["LiveUpdates:DebounceMilliseconds"] = "100" }).Build());
@@ -405,7 +509,10 @@ public sealed class ComponentTests : BunitContext
         public Func<string, Task<ManagedLink>> Analytics { get; set; } = _ => throw new NotImplementedException();
         public Func<ClaimsPrincipal, Task<IReadOnlyList<WorkspaceSummary>>> Workspaces { get; set; } = _ => throw new NotImplementedException();
         public Func<Guid, Task<IReadOnlyList<ManagedLink>>> WorkspaceList { get; set; } = _ => throw new NotImplementedException();
+        public Func<Guid, string, Task<LinkInsights>> InsightsData { get; set; } = (_, _) => throw new NotImplementedException();
+        public Func<Guid, Task<IReadOnlyList<LinkSparkline>>> Sparklines { get; set; } = _ => Task.FromResult<IReadOnlyList<LinkSparkline>>([]);
         public List<Guid> WorkspaceReads { get; } = [];
+        public List<Guid> SparklineReads { get; } = [];
         public int AuthenticatedCalls { get; private set; }
         public Task<LinkResult> CreateGuestAsync(CreateLinkRequest request, CancellationToken cancellationToken = default) => Guest(request);
         public Task<LinkResult> CreateManagedAsync(CreateLinkRequest request, ClaimsPrincipal user, CancellationToken cancellationToken = default)
@@ -420,6 +527,12 @@ public sealed class ComponentTests : BunitContext
         { Assert.True(user.Identity?.IsAuthenticated); return Workspaces(user); }
         public Task<IReadOnlyList<ManagedLink>> GetWorkspaceManagedLinksAsync(Guid workspaceId, ClaimsPrincipal user, CancellationToken cancellationToken = default)
         { Assert.True(user.Identity?.IsAuthenticated); WorkspaceReads.Add(workspaceId); return WorkspaceList(workspaceId); }
+        public Task<ManagedLink> GetWorkspaceManagedLinkAsync(Guid workspaceId, string shortCode, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        { Assert.True(user.Identity?.IsAuthenticated); return Task.FromResult(Managed); }
+        public Task<LinkInsights> GetWorkspaceInsightsAsync(Guid workspaceId, string shortCode, string range, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        { Assert.True(user.Identity?.IsAuthenticated); return InsightsData(workspaceId, range); }
+        public Task<IReadOnlyList<LinkSparkline>> GetWorkspaceSparklinesAsync(Guid workspaceId, int days, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        { Assert.True(user.Identity?.IsAuthenticated); SparklineReads.Add(workspaceId); return Sparklines(workspaceId); }
         public Uri PublicUrl(string shortCode) => new("https://api.example.test/r/" + shortCode);
     }
 }

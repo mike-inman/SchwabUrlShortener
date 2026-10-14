@@ -8,6 +8,8 @@ public static class AcceptLanguageParser
         if (string.IsNullOrWhiteSpace(acceptLanguageHeader)) return null;
         var first = acceptLanguageHeader.Split(',', 2)[0];
         var tag = first.Split(';', 2)[0].Trim();
-        return tag.Length == 0 ? null : tag;
+        return tag.Length is > 0 and <= 35 && tag.All(c =>
+            c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '-')
+            ? tag : null;
     }
 }

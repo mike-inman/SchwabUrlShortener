@@ -31,6 +31,7 @@ if (args.Contains("--healthcheck", StringComparer.Ordinal))
 }
 
 var builder = WebApplication.CreateBuilder(args);
+const string DevelopmentVisitorSecret = "development-only-visitor-hash-secret-32-bytes";
 builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 HardeningHostConfiguration.AddConfiguredRateLimiting(builder.Services, builder.Configuration);
 if (!args.Contains("--migrate", StringComparer.Ordinal)) builder.Services.AddLiveUpdates(builder.Configuration);
@@ -58,6 +59,7 @@ builder.Services.AddDbContextFactory<ShortenerDbContext>((sp, options) =>
     options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
 builder.Services.AddSingleton<IUrlShortenerRepository, PostgresUrlShortenerRepository>();
 builder.Services.AddSingleton<IWorkspaceLinkAccess, PostgresWorkspaceLinkAccess>();
+builder.Services.AddSingleton<LinkInsightsReader>();
 builder.Services.AddSingleton<PostgresCustomerWorkspaces>();
 builder.Services.AddSingleton<IRedirectCache>(sp => new RedisRedirectCache(
     sp.GetRequiredService<IConfiguration>().GetConnectionString("Redis"),
@@ -67,6 +69,9 @@ builder.Services.AddSingleton(sp =>
     var secret = sp.GetRequiredService<IConfiguration>()["VisitorHash:DailySecret"];
     if (string.IsNullOrWhiteSpace(secret))
         throw new InvalidOperationException("VisitorHash:DailySecret must be configured for managed click capture.");
+    if (!sp.GetRequiredService<IHostEnvironment>().IsDevelopment() &&
+        string.Equals(secret, DevelopmentVisitorSecret, StringComparison.Ordinal))
+        throw new InvalidOperationException("VisitorHash:DailySecret must use a non-development value.");
     return VisitorHashService.FromConfiguredSecret(secret);
 });
 builder.Services.AddSingleton<IUrlShortenerService, UrlShortenerService>();
@@ -149,7 +154,6 @@ if (string.IsNullOrWhiteSpace(app.Configuration["AzureAd:ClientId"]))
 if (string.IsNullOrWhiteSpace(app.Configuration.GetConnectionString("ShortenerDb")))
     throw new InvalidOperationException("ConnectionStrings:ShortenerDb must be configured for PostgreSQL persistence.");
 _ = app.Services.GetRequiredService<NpgsqlDataSource>();
-_ = app.Services.GetRequiredService<VisitorHashService>();
 if (app.Environment.IsDevelopment()) app.MapOpenApi();
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
@@ -280,6 +284,30 @@ workspaceManaged.MapGet("/analytics", async (Guid workspaceId, ClaimsPrincipal p
         : Results.Ok(mappings.Select(ToManagedResponse).ToArray());
 }).WithName("GetWorkspaceManagedAnalytics");
 
+workspaceManaged.MapGet("/sparklines", async (Guid workspaceId, int? days, ClaimsPrincipal principal,
+    HttpContext context, IWorkspaceLinkAccess access, LinkInsightsReader insights, CancellationToken cancellationToken) =>
+{
+    if (days is < 1 or > 30) return Results.BadRequest(new ApiError("days must be between 1 and 30."));
+    if (!customerIdentity) return Results.NotFound();
+    if (!TryGetValidatedIdentity(principal, context, out var issuer, out var subject)) return Results.Forbid();
+    if (!await access.CanManageLinksAsync(issuer, subject, workspaceId, cancellationToken))
+        return Results.NotFound(new ApiError("Workspace not found."));
+    return Results.Ok(await insights.GetSparklinesAsync(workspaceId, days ?? 7, cancellationToken));
+}).WithName("GetWorkspaceLinkSparklines");
+
+workspaceManaged.MapGet("/{shortCode}/insights", async (Guid workspaceId, string shortCode, string? range,
+    ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service,
+    LinkInsightsReader insights, TimeProvider clock, CancellationToken cancellationToken) =>
+{
+    if (!LinkInsightsReader.TryRange(range ?? "7d", clock.GetUtcNow(), out _, out _, out _))
+        return Results.BadRequest(new ApiError("range must be 24h, 7d, or 30d."));
+    if (!customerIdentity) return Results.NotFound();
+    if (!TryGetValidatedIdentity(principal, context, out var issuer, out var subject)) return Results.Forbid();
+    var mapping = await service.GetWorkspaceManagedAsync(issuer, subject, workspaceId, shortCode, cancellationToken);
+    return mapping is null ? Results.NotFound(new ApiError("Managed link not found."))
+        : Results.Ok(await insights.GetAsync(workspaceId, mapping.Id, range ?? "7d", cancellationToken));
+}).WithName("GetWorkspaceLinkInsights");
+
 workspaceManaged.MapGet("/{shortCode}", async (Guid workspaceId, string shortCode, ClaimsPrincipal principal,
     HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
@@ -302,6 +330,8 @@ if (args.Contains("--migrate", StringComparer.Ordinal))
     await db.Database.MigrateAsync();
     return;
 }
+
+_ = app.Services.GetRequiredService<VisitorHashService>();
 
 app.Run();
 

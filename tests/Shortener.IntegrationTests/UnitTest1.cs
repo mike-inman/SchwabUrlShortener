@@ -685,7 +685,7 @@ public class ShortenerApiTests
             await using (var row = await check.ExecuteReaderAsync())
             {
                 Assert.True(await row.ReadAsync());
-                Assert.Equal(2, row.GetInt16(0));
+                Assert.Equal(3, row.GetInt16(0));
                 Assert.True(row.GetBoolean(1));
                 Assert.Equal(workspaces[2], row.GetGuid(2));
             }
@@ -776,7 +776,7 @@ public class ShortenerApiTests
             if (testSchema is not null) throw new InvalidOperationException("Temporary schema tests must not truncate tables.");
             using var connection = new NpgsqlConnection(ConnectionString);
             connection.Open();
-            using var command = new NpgsqlCommand("TRUNCATE TABLE click_dead_letters, processed_click_events, click_outbox, url_mappings", connection);
+            using var command = new NpgsqlCommand("TRUNCATE TABLE link_visitor_daily, link_click_dimension_daily, link_click_hourly, link_click_facts, click_dead_letters, processed_click_events, click_outbox, url_mappings", connection);
             command.ExecuteNonQuery();
         }
         protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
