@@ -1,8 +1,10 @@
 param location string
+param resourceTags object
 
 resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   name: 'vnet-shortener'
   location: location
+  tags: resourceTags
   properties: {
     addressSpace: { addressPrefixes: [ '10.60.0.0/16' ] }
     subnets: [
@@ -32,6 +34,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
 resource postgresZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
   name: 'shortener.private.postgres.database.azure.com'
   location: 'global'
+  tags: resourceTags
 }
 
 resource postgresZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {

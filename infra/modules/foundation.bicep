@@ -1,4 +1,5 @@
 param location string
+param resourceTags object
 param suffix string
 param acaSubnetId string
 param operatorPublicIp string
@@ -7,13 +8,15 @@ param logWorkspaceId string
 resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
   name: 'acrshortener${suffix}'
   location: location
+  tags: resourceTags
   sku: { name: 'Basic' }
-  properties: { adminUserEnabled: false }
+  properties: { adminUserEnabled: false, anonymousPullEnabled: false }
 }
 
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: 'kv-shortener-${suffix}'
   location: location
+  tags: resourceTags
   properties: {
     tenantId: subscription().tenantId
     sku: { family: 'A', name: 'standard' }
@@ -30,12 +33,12 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
-resource apiId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = { name: 'id-shortener-api', location: location }
-resource webId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = { name: 'id-shortener-web', location: location }
-resource analyticsId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = { name: 'id-shortener-analytics', location: location }
-resource migrateId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = { name: 'id-shortener-migrate', location: location }
+resource apiId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = { name: 'id-shortener-api', location: location, tags: resourceTags }
+resource webId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = { name: 'id-shortener-web', location: location, tags: resourceTags }
+resource analyticsId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = { name: 'id-shortener-analytics', location: location, tags: resourceTags }
+resource migrateId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = { name: 'id-shortener-migrate', location: location, tags: resourceTags }
 // Redis needs its own identity to read only the raw password secret at P2.
-resource redisId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = { name: 'id-shortener-redis', location: location }
+resource redisId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = { name: 'id-shortener-redis', location: location, tags: resourceTags }
 
 var acrPullRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 resource pullApi 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

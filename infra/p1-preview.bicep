@@ -15,6 +15,13 @@ param operatorPublicIp string = ''
 resource shortenerGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: 'rg-schwab-url-shortener'
   location: location
+  tags: {
+    app: 'schwab-url-shortener'
+    env: 'prod'
+    owner: 'social@mediaraq.com'
+    costCenter: 'assessment'
+    managedBy: 'bicep'
+  }
 }
 
 module p1 './main.bicep' = {
@@ -29,4 +36,15 @@ module p1 './main.bicep' = {
     operatorPublicIp: operatorPublicIp
     deploymentPhase: 'p1'
   }
+}
+
+module freeCspm './subscription-foundational-cspm.bicep' = {
+  name: 'shortener-foundational-cspm-preview'
+}
+
+// The lock follows every P1 resource and the free subscription posture plan.
+module finalLock './p1-lock.bicep' = {
+  name: 'shortener-p1-final-lock-preview'
+  scope: shortenerGroup
+  dependsOn: [ p1, freeCspm ]
 }

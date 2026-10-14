@@ -13,19 +13,27 @@ param operatorPublicIp string = ''
 param deploymentPhase string = 'p1'
 
 var suffix = substring(uniqueString(resourceGroup().id), 0, 6)
+var resourceTags = {
+  app: 'schwab-url-shortener'
+  env: 'prod'
+  owner: 'social@mediaraq.com'
+  costCenter: 'assessment'
+  managedBy: 'bicep'
+}
 
 module network './modules/network.bicep' = {
   name: 'network'
-  params: { location: location }
+  params: { location: location, resourceTags: resourceTags }
 }
 module observability './modules/observability.bicep' = {
   name: 'observability'
-  params: { location: location }
+  params: { location: location, resourceTags: resourceTags }
 }
 module foundation './modules/foundation.bicep' = {
   name: 'foundation'
   params: {
     location: location
+    resourceTags: resourceTags
     suffix: suffix
     acaSubnetId: network.outputs.acaSubnetId
     operatorPublicIp: operatorPublicIp
@@ -36,6 +44,7 @@ module data './modules/data.bicep' = {
   name: 'data'
   params: {
     location: location
+    resourceTags: resourceTags
     suffix: suffix
     acaSubnetId: network.outputs.acaSubnetId
     postgresSubnetId: network.outputs.postgresSubnetId
@@ -56,9 +65,12 @@ module data './modules/data.bicep' = {
 module monitoring './modules/monitoring.bicep' = {
   name: 'monitoring'
   params: {
+    location: location
     contactEmail: budgetContactEmail
+    resourceTags: resourceTags
     postgresId: data.outputs.postgresId
     eventhubsId: data.outputs.eventhubsId
+    logWorkspaceId: observability.outputs.logWorkspaceId
   }
 }
 

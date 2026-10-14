@@ -1,8 +1,10 @@
 param location string
+param resourceTags object
 
 resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: 'log-shortener'
   location: location
+  tags: resourceTags
   properties: {
     retentionInDays: 30
     sku: { name: 'PerGB2018' }
@@ -13,6 +15,7 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
 resource insights 'Microsoft.Insights/components@2020-02-02' = {
   name: 'appi-shortener'
   location: location
+  tags: resourceTags
   kind: 'web'
   properties: {
     Application_Type: 'web'

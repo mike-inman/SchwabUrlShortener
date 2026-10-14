@@ -1,4 +1,5 @@
 param location string
+param resourceTags object
 param suffix string
 param acaSubnetId string
 param postgresSubnetId string
@@ -28,6 +29,7 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = { name: vaultNa
 resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: 'pg-shortener-${suffix}'
   location: location
+  tags: resourceTags
   sku: { name: 'Standard_B1ms', tier: 'Burstable' }
   properties: {
     version: '17'
@@ -47,10 +49,21 @@ resource postgresDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08
   name: 'shortener'
   properties: { charset: 'UTF8', collation: 'en_US.utf8' }
 }
+resource postgresTlsMinimum 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
+  parent: postgres
+  name: 'ssl_min_protocol_version'
+  properties: { value: 'TLSv1.2', source: 'user-override' }
+}
+resource postgresRequireTls 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
+  parent: postgres
+  name: 'require_secure_transport'
+  properties: { value: 'ON', source: 'user-override' }
+}
 
 resource eventhubs 'Microsoft.EventHub/namespaces@2024-01-01' = {
   name: 'eh-shortener-${suffix}'
   location: location
+  tags: resourceTags
   sku: { name: 'Standard', tier: 'Standard', capacity: 1 }
   properties: {
     isAutoInflateEnabled: false
@@ -87,11 +100,13 @@ resource eventhubsRule 'Microsoft.EventHub/namespaces/authorizationRules@2024-01
 resource protectionStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   name: 'stshortenerdp${suffix}'
   location: location
+  tags: resourceTags
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
   properties: {
     allowSharedKeyAccess: false
     allowBlobPublicAccess: false
+    supportsHttpsTrafficOnly: true
     publicNetworkAccess: 'Enabled'
     minimumTlsVersion: 'TLS1_2'
     networkAcls: {
@@ -117,11 +132,13 @@ resource protectionContainer 'Microsoft.Storage/storageAccounts/blobServices/con
 resource redisStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   name: 'stshortenerrd${suffix}'
   location: location
+  tags: resourceTags
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
   properties: {
     allowSharedKeyAccess: true
     allowBlobPublicAccess: false
+    supportsHttpsTrafficOnly: true
     publicNetworkAccess: 'Enabled'
     minimumTlsVersion: 'TLS1_2'
     networkAcls: {
@@ -145,11 +162,13 @@ resource redisShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2024-
 resource apiKey 'Microsoft.KeyVault/vaults/keys@2023-07-01' = {
   parent: vault
   name: 'dataprotection-api'
+  tags: resourceTags
   properties: { kty: 'RSA', keySize: 2048, keyOps: [ 'encrypt', 'decrypt', 'wrapKey', 'unwrapKey' ] }
 }
 resource webKey 'Microsoft.KeyVault/vaults/keys@2023-07-01' = {
   parent: vault
   name: 'dataprotection-web'
+  tags: resourceTags
   properties: { kty: 'RSA', keySize: 2048, keyOps: [ 'encrypt', 'decrypt', 'wrapKey', 'unwrapKey' ] }
 }
 
@@ -157,31 +176,37 @@ var pgBase = 'Host=${postgres.properties.fullyQualifiedDomainName};Port=5432;Dat
 resource pgAppSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'pg-app-connection'
+  tags: resourceTags
   properties: { value: '${pgBase};Maximum Pool Size=2' }
 }
 resource pgMigrateSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'pg-migrate-connection'
+  tags: resourceTags
   properties: { value: pgBase }
 }
 resource redisPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'redis-password'
+  tags: resourceTags
   properties: { value: redisPassword }
 }
 resource redisConnectionSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'redis-connection'
+  tags: resourceTags
   properties: { value: 'ca-shortener-redis:6379,password=${redisPassword},abortConnect=False' }
 }
 resource eventhubsSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'eventhubs-connection'
+  tags: resourceTags
   properties: { value: eventhubsRule.listKeys().primaryConnectionString }
 }
 resource webClientSecretKv 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'web-client-secret'
+  tags: resourceTags
   properties: { value: webClientSecret }
 }
 

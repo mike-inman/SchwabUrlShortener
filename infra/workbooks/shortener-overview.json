@@ -1,0 +1,104 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "name": "overview",
+      "content": {
+        "json": "# Schwab URL Shortener overview\nRequest panels need Track D OpenTelemetry export. Replica panels need P2 Container Apps metric export. Analytics consumer lag must be emitted by Track D as `shortener.analytics.consumer_lag`; the outbox metric is `shortener.clicks.outbox.oldest_seconds`. Empty panels before those phases are expected."
+      }
+    },
+    {
+      "type": 3,
+      "name": "query-1",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Request rate by app",
+        "query": "AppRequests | where TimeGenerated > ago(1h) | summarize Requests=sum(ItemCount) by bin(TimeGenerated, 1m), AppRoleName | render timechart",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      }
+    },
+    {
+      "type": 3,
+      "name": "query-2",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "P95 request latency",
+        "query": "AppRequests | where TimeGenerated > ago(1h) | summarize P95Ms=percentile(DurationMs, 95) by bin(TimeGenerated, 1m), AppRoleName | render timechart",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      }
+    },
+    {
+      "type": 3,
+      "name": "query-3",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "HTTP errors by app",
+        "query": "AppRequests | where TimeGenerated > ago(1h) | where toint(ResultCode) >= 500 | summarize Errors=sum(ItemCount) by bin(TimeGenerated, 1m), AppRoleName | render timechart",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      }
+    },
+    {
+      "type": 3,
+      "name": "query-4",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Container App replicas",
+        "query": "AzureMetrics | where TimeGenerated > ago(1h) | where MetricName == 'Replicas' and _ResourceId has '/providers/Microsoft.App/containerApps/' | summarize Replicas=max(Maximum) by bin(TimeGenerated, 1m), Resource | render timechart",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      }
+    },
+    {
+      "type": 3,
+      "name": "query-5",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Analytics consumer lag",
+        "query": "AppMetrics | where TimeGenerated > ago(1h) | where Name == 'shortener.analytics.consumer_lag' | summarize Lag=max(Max) by bin(TimeGenerated, 1m), AppRoleName | render timechart",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      }
+    },
+    {
+      "type": 3,
+      "name": "query-6",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Oldest unpublished outbox event",
+        "query": "AppMetrics | where TimeGenerated > ago(1h) | where Name == 'shortener.clicks.outbox.oldest_seconds' | summarize AgeSeconds=max(Max) by bin(TimeGenerated, 1m), AppRoleName | render timechart",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      }
+    },
+    {
+      "type": 3,
+      "name": "query-7",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "PostgreSQL CPU and connections",
+        "query": "AzureMetrics | where TimeGenerated > ago(1h) | where _ResourceId has '/providers/Microsoft.DBforPostgreSQL/flexibleServers/' | where MetricName in ('cpu_percent', 'active_connections') | summarize Value=max(Maximum) by bin(TimeGenerated, 1m), MetricName | render timechart",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      }
+    }
+  ],
+  "isLocked": false
+}

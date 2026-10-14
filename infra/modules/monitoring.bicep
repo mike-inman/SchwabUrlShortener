@@ -1,10 +1,29 @@
+param location string
 param contactEmail string
+param resourceTags object
 param postgresId string
 param eventhubsId string
+param logWorkspaceId string
+
+resource overviewWorkbook 'Microsoft.Insights/workbooks@2023-06-01' = {
+  name: guid(resourceGroup().id, 'shortener-overview')
+  location: location
+  kind: 'shared'
+  tags: resourceTags
+  properties: {
+    category: 'workbook'
+    displayName: 'Schwab URL Shortener overview'
+    description: 'Requests, errors, replicas, Analytics lag, outbox age, and PostgreSQL health.'
+    sourceId: logWorkspaceId
+    version: 'Notebook/1.0'
+    serializedData: loadTextContent('../workbooks/shortener-overview.json')
+  }
+}
 
 resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
   name: 'ag-shortener-ops'
   location: 'global'
+  tags: resourceTags
   properties: {
     groupShortName: 'Shortener'
     enabled: true
@@ -15,6 +34,7 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
 resource postgresCpu 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: 'alert-shortener-postgres-cpu'
   location: 'global'
+  tags: resourceTags
   properties: {
     description: 'PostgreSQL CPU above 80 percent for 10 minutes.'
     severity: 2
@@ -35,6 +55,7 @@ resource postgresCpu 'Microsoft.Insights/metricAlerts@2018-03-01' = {
 resource postgresConnections 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: 'alert-shortener-postgres-connections'
   location: 'global'
+  tags: resourceTags
   properties: {
     description: 'PostgreSQL active connections above 28 for 10 minutes.'
     severity: 2
@@ -55,6 +76,7 @@ resource postgresConnections 'Microsoft.Insights/metricAlerts@2018-03-01' = {
 resource eventhubsBytes 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: 'alert-shortener-eventhubs-ingress-bytes'
   location: 'global'
+  tags: resourceTags
   properties: {
     description: 'Incoming bytes above 420,000,000 per 10 minutes (0.7 MB/s average).'
     severity: 2
@@ -72,6 +94,7 @@ resource eventhubsBytes 'Microsoft.Insights/metricAlerts@2018-03-01' = {
 resource eventhubsMessages 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: 'alert-shortener-eventhubs-ingress-messages'
   location: 'global'
+  tags: resourceTags
   properties: {
     description: 'Incoming messages above 420,000 per 10 minutes (700/s average).'
     severity: 2
