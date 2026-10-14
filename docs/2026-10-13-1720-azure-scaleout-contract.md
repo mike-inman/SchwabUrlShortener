@@ -1,6 +1,6 @@
 # Azure scale-out contract — 2026-10-13 17:20 CDT
 
-Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts`. **Revised 18:50 CDT: replaced the staging design with one lean, scalable environment** (no staging, no Front Door, no private endpoints, Burstable PostgreSQL, Redis as a container, `rg-schwab-url-shortener`). Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. **Revised 19:00 CDT: restored low-cost design controls** — PostgreSQL VNet integration (no public endpoint), Redis persistence, monitoring alerts and diagnostics, and an automated Kafka-lag scale demonstration. **Revised 19:05 CDT**: PostgreSQL pool size set to 2 for the 35-connection B1ms limit. **Revised 19:10 CDT**: design principles added; Event Hubs auto-inflate removed in favor of a fixed 1 throughput unit plus a throughput alert. **Revised 19:15 CDT**: Entra identity settings added, with the Web client secret stored in Key Vault; secret-handling rules stated. Change this file only by editing it and telling every active track.
+Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts`. **Revised 18:50 CDT: replaced the staging design with one lean, scalable environment** (no staging, no Front Door, no private endpoints, Burstable PostgreSQL, Redis as a container, `rg-schwab-url-shortener`). Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. **Revised 19:00 CDT: restored low-cost design controls** — PostgreSQL VNet integration (no public endpoint), Redis persistence, monitoring alerts and diagnostics, and an automated Kafka-lag scale demonstration. **Revised 19:05 CDT**: PostgreSQL pool size set to 2 for the 35-connection B1ms limit. **Revised 19:10 CDT**: design principles added; Event Hubs auto-inflate removed in favor of a fixed 1 throughput unit plus a throughput alert. **Revised 19:15 CDT**: Entra identity settings added, with the Web client secret stored in Key Vault; secret-handling rules stated. **Revised 19:20 CDT**: one managed identity per service, with per-secret Key Vault access. Change this file only by editing it and telling every active track.
 
 ## Purpose
 
@@ -129,10 +129,27 @@ Azure runs `Identity__Mode=Workforce` by default, using the existing registratio
 
 ### Secret handling
 
-- Every runtime secret lives in Key Vault and reaches apps only as a Container Apps Key Vault reference resolved with the app's managed identity: `pg-app-connection`, `pg-migrate-connection`, `eventhubs-connection`, `redis-connection`, `web-client-secret`.
+- Every runtime secret lives in Key Vault and reaches apps only as a Container Apps Key Vault reference resolved with that app's own managed identity: `pg-app-connection`, `pg-migrate-connection`, `eventhubs-connection`, `redis-connection`, `redis-password`, `web-client-secret`.
 - Deployment-time inputs (`POSTGRES_PASSWORD`, `WEB_CLIENT_SECRET`) live only in the Git-ignored local `azd` environment file and are passed to Bicep as `@secure()` parameters. Bicep writes them into Key Vault through the control plane, so Key Vault's network rules do not block it. They never appear in outputs, logs, or chat.
 - One platform exception: Container Apps mounts Azure Files only with the storage account key, held in the environment's encrypted storage definition. It is scoped to the separate Redis persistence account; the Data Protection account keeps shared-key access disabled.
 - Passwordless access (Entra authentication to PostgreSQL and Event Hubs) removes the database password and Event Hubs connection string entirely. It needs application code changes and is a documented next step.
+
+### Managed identities (one per service, least privilege)
+
+Every service that touches an Azure resource has its own user-assigned managed identity. No identity is shared. Key Vault access is granted per secret or per key (role assignments scoped to the individual secret or key), never vault-wide. `AZURE_CLIENT_ID` on each app is its own identity's client ID.
+
+| Identity | Used by | Roles, and nothing else |
+|---|---|---|
+| `id-shortener-api` | `ca-shortener-api` | `AcrPull` on the registry; `Key Vault Secrets User` on `pg-app-connection`, `redis-connection`, `eventhubs-connection`; `Key Vault Crypto User` on key `dataprotection-api`; `Storage Blob Data Contributor` on blob container `dataprotection` |
+| `id-shortener-web` | `ca-shortener-web` | `AcrPull`; `Key Vault Secrets User` on `redis-connection`, `web-client-secret`; `Key Vault Crypto User` on key `dataprotection-web`; `Storage Blob Data Contributor` on blob container `dataprotection` |
+| `id-shortener-analytics` | `ca-shortener-analytics` | `AcrPull`; `Key Vault Secrets User` on `pg-app-connection`, `eventhubs-connection`, `redis-connection` |
+| `id-shortener-migrate` | `caj-shortener-migrate` | `AcrPull`; `Key Vault Secrets User` on `pg-migrate-connection` |
+| `id-shortener-redis` | `ca-shortener-redis` | `Key Vault Secrets User` on `redis-password` (the bare password the Redis server starts with; `redis-connection` holds the client connection string) |
+| `id-shortener-proxy` | `ca-shortener-proxy`, only if deployed | none beyond pulling its public image; no Key Vault access |
+
+The KEDA Kafka scale rule on Analytics reads `eventhubs-connection` through the Analytics identity.
+
+Where identities stop: PostgreSQL and Event Hubs authenticate with a password and connection string that each app fetches from Key Vault with its identity. Open-source Redis has no Entra support, so its password comes from Key Vault the same way. Entra authentication to PostgreSQL and Event Hubs (removing those secrets) is the documented code-change step.
 
 ### Data Protection (Track A)
 

@@ -1,5 +1,5 @@
 ## Track C — Azure Lean Scalable Environment Handoff
-Status: drafted on 2026-10-13; **rewritten 18:50 CDT** for one lean environment, replacing the staging design. **Revised 19:00 CDT**: PostgreSQL VNet integration, Redis persistence, monitoring, and automated Kafka-lag scale demo restored. **Revised 19:10 CDT**: design principles; Event Hubs fixed at 1 throughput unit with an alert, auto-inflate disabled. **Revised 19:15 CDT**: Entra identity settings and Web client secret in Key Vault.
+Status: drafted on 2026-10-13; **rewritten 18:50 CDT** for one lean environment, replacing the staging design. **Revised 19:00 CDT**: PostgreSQL VNet integration, Redis persistence, monitoring, and automated Kafka-lag scale demo restored. **Revised 19:10 CDT**: design principles; Event Hubs fixed at 1 throughput unit with an alert, auto-inflate disabled. **Revised 19:15 CDT**: Entra identity settings and Web client secret in Key Vault. **Revised 19:20 CDT**: one identity per service with per-secret access.
 You are working in /Users/michaelinman/Repos/SchwabUrlShortener-infra.
 
 Follow these repo standards exactly:
@@ -42,11 +42,11 @@ P1 — Foundation and data (one approval)
 4. Log Analytics with a 1 GB/day cap, workspace-based Application Insights.
 5. Container Registry Basic, admin user disabled.
 6. Key Vault Standard, RBAC, soft delete and purge protection; network rules per the contract.
-7. User-assigned identities `id-shortener-api`, `id-shortener-web`, `id-shortener-analytics`, `id-shortener-proxy` (only if the proxy is used), each with only the roles its app needs: `AcrPull`, `Key Vault Secrets User`, and for API and Web, `Storage Blob Data Contributor` on the `dataprotection` container and `Key Vault Crypto User` on its own Data Protection key.
+7. One user-assigned identity per service, exactly per the contract's Managed identities table (`id-shortener-api`, `-web`, `-analytics`, `-migrate`, `-redis`, and `-proxy` only if the proxy is used), with role assignments scoped to individual secrets, keys, and the blob container, never vault-wide. Record every assignment and its scope in the validation note.
 8. Storage account for Data Protection keys and Key Vault keys `dataprotection-api` and `dataprotection-web`, per the contract.
 9. PostgreSQL Flexible Server Burstable `Standard_B1ms`, PostgreSQL 17, 32 GiB, 7-day backups, **private access (VNet integration) in the delegated subnet, no public endpoint, no firewall rules**, TLS required, administrator `shortener`, database `shortener`. Read `max_connections` and record the connection-budget arithmetic from the contract. Private access cannot be changed after creation; verify it in the what-if before approval.
 10. Event Hubs Standard per the contract, with a Send/Listen-only authorization rule and network rules per the contract.
-11. Key Vault secrets `pg-app-connection`, `pg-migrate-connection`, `eventhubs-connection`, `redis-connection` (with a generated Redis password; never printed), and `web-client-secret` from the secure `azd` value `WEB_CLIENT_SECRET`. Set `WEB_CLIENT_ID` in the `azd` environment yourself (it is not secret); ask Michael to set `WEB_CLIENT_SECRET` with a hidden-input command, as you did for the password. Apply the contract's Identity and Secret handling sections.
+11. Key Vault secrets `pg-app-connection`, `pg-migrate-connection`, `eventhubs-connection`, `redis-connection` and `redis-password` (from one generated Redis password; never printed), and `web-client-secret` from the secure `azd` value `WEB_CLIENT_SECRET`. Set `WEB_CLIENT_ID` in the `azd` environment yourself (it is not secret); ask Michael to set `WEB_CLIENT_SECRET` with a hidden-input command, as you did for the password. Apply the contract's Identity and Secret handling sections.
 12. Budget USD 100/month with alerts at 50/80/100% to `BUDGET_CONTACT_EMAIL`.
 12a. The separate Redis persistence storage account and Azure Files share `redis-data`, per the contract.
 12b. Diagnostic settings, one action group, and the alert rules listed under Monitoring in the contract. Record each rule's name and threshold.
@@ -54,9 +54,9 @@ P1 — Foundation and data (one approval)
 P2 — Apps with today's images (one approval)
 13. Container Apps environment (consumption workload profile) in the subnet, logging to Log Analytics.
 14. Public routing per the contract: verify native environment path-based routing (general availability in `centralus`, WebSockets, sticky sessions for Web) and record the documentation URL. Use it if all three hold; otherwise deploy `ca-shortener-proxy` with Caddy configured from `deploy/Caddyfile.local` plus the contract's `header_up Host` and trusted-proxy settings, delivered as a Container Apps secret or a config file mount, not a custom image.
-15. `ca-shortener-redis`: `redis:7.4-alpine` pinned by digest, `--requirepass` from the Key Vault secret, `--appendonly yes --appendfsync everysec --dir /data`, `/data` mounted from the `redis-data` Azure Files share through a Container Apps environment storage definition, internal TCP ingress on 6379, 1 replica. Verify that data survives a replica restart.
+15. `ca-shortener-redis`, using `id-shortener-redis`: `redis:7.4-alpine` pinned by digest, `--requirepass` from Key Vault secret `redis-password`, `--appendonly yes --appendfsync everysec --dir /data`, `/data` mounted from the `redis-data` Azure Files share through a Container Apps environment storage definition, internal TCP ingress on 6379, 1 replica. Verify that data survives a replica restart.
 16. `ca-shortener-api`, `ca-shortener-web`, `ca-shortener-analytics` with the contract's CPU, memory, replica, scale-rule, probe, `AllowedHosts`, `PublicLinks__BaseUrl`, and Key Vault reference settings. Web: single revision mode, session affinity `sticky`. Analytics: KEDA `kafka` rule using the Event Hubs SASL secret.
-17. `caj-shortener-migrate`: manual job, API image, `--migrate`, `pg-migrate-connection`, 10-minute timeout.
+17. `caj-shortener-migrate`, using `id-shortener-migrate`: manual job, API image, `--migrate`, `pg-migrate-connection`, 10-minute timeout.
 18. Build and push images with `infra/scripts/build-images.sh`, run the migration job once, and confirm all apps healthy.
 19. `enableScaleOutSettings` (default `false`) gates the settings only Track A's and Track B's code understands: `DataProtection__*`, `TokenCache__*`, `ForwardedHeaders__*`, `Kafka__SecurityProtocol`, `Kafka__Sasl*`, `Kafka__EnableIdempotence`, `LiveUpdates__*`. With it `false`, Analytics cannot reach Event Hubs; set Analytics min and max to 0 until P3, and record that.
 
@@ -85,7 +85,7 @@ Required discovery before edits:
 Implementation requirements:
 - No secret appears in any committed file, deployment output, log, or chat. Secrets flow only through Key Vault and Container Apps Key Vault references using managed identities.
 - Every app sets `AZURE_CLIENT_ID` to its own identity.
-- Least privilege per identity.
+- Least privilege per identity: no shared identities, no vault-wide Key Vault roles. In P1 testing, confirm with `az role assignment list` that each identity has exactly the contract's assignments.
 - Bicep lints with zero errors and warnings, or each remaining warning is listed with a reason.
 - Application images deploy by digest; Redis and Caddy images by pinned digest.
 - Every lean choice has a one-line production upgrade note in `infra/README.md`.
