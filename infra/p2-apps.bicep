@@ -74,7 +74,19 @@ var vaultBase = 'https://${vault.name}.vault.azure.net/secrets/'
 var dpBlobBase = 'https://${dpStorage.name}.blob.core.windows.net/dataprotection/'
 var dpKeyBase = 'https://${vault.name}.vault.azure.net/keys/'
 var commonIdentityEnv = 'Customer'
+var secretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var appInsightsEnv = [ { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights.properties.ConnectionString } ]
+
+resource visitorHashSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'visitor-hash-secret'
+}
+
+resource apiVisitorHashRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(visitorHashSecret.id, 'api', secretsUserRole)
+  scope: visitorHashSecret
+  properties: { principalId: apiId.properties.principalId, principalType: 'ServicePrincipal', roleDefinitionId: secretsUserRole }
+}
 
 resource redis 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'ca-shortener-redis'
@@ -126,6 +138,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
   location: location
   tags: tags
   identity: { type: 'UserAssigned', userAssignedIdentities: { '${apiId.id}': {} } }
+  dependsOn: [ apiVisitorHashRead ]
   properties: {
     environmentId: environment.id
     configuration: {
@@ -135,6 +148,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
       secrets: [
         { name: 'pg-app-connection', keyVaultUrl: '${vaultBase}pg-app-connection', identity: apiId.id }
         { name: 'redis-connection', keyVaultUrl: '${vaultBase}redis-connection', identity: apiId.id }
+        { name: 'visitor-hash-secret', keyVaultUrl: '${vaultBase}visitor-hash-secret', identity: apiId.id }
       ]
     }
     template: {
@@ -145,6 +159,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
           { name: 'AZURE_CLIENT_ID', value: apiId.properties.clientId }
           { name: 'ConnectionStrings__ShortenerDb', secretRef: 'pg-app-connection' }
           { name: 'ConnectionStrings__Redis', secretRef: 'redis-connection' }
+          { name: 'VisitorHash__DailySecret', secretRef: 'visitor-hash-secret' }
           { name: 'Identity__Mode', value: commonIdentityEnv }
           { name: 'AzureAd__Instance', value: 'https://schwaburlshortener.ciamlogin.com/' }
           { name: 'AzureAd__TenantId', value: '6adc36e9-dfe5-469f-8aed-6ef83abcdd19' }
