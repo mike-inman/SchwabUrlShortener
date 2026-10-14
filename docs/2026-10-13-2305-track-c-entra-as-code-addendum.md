@@ -1,5 +1,5 @@
 ## Track C addendum — Entra app registration configuration as code
-Status: drafted 2026-10-13 23:05 CDT. Applies to Track C (`/Users/michaelinman/Repos/SchwabUrlShortener-infra`, branch `codex/azure-infra`). Do this before P3.
+Status: drafted 2026-10-13 23:05 CDT. **Corrected 23:20 CDT: target the customer Web registration `93f2f816-0a95-41e0-b7df-7ca3c0cce8a0` in External ID tenant `6adc36e9-dfe5-469f-8aed-6ef83abcdd19`, not the workforce registration; see the contract's Identity section.** All Graph calls use the separate CLI profile `AZURE_CONFIG_DIR=$HOME/.azure-ziplio`. Applies to Track C (`/Users/michaelinman/Repos/SchwabUrlShortener-infra`, branch `codex/azure-infra`). Do this before P3.
 
 Follow all standards in the Track C handoff. Copy this addendum into your worktree's `docs/` and commit it first.
 
