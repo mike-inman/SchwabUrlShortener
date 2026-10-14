@@ -41,6 +41,7 @@ public sealed class ComponentTests : BunitContext
         Setup();
 
         var navigation = Render<NavMenu>();
+        Assert.Single(navigation.FindAll("a[href='/contact']"));
 
         Assert.Single(navigation.FindAll("a[href='/account/signin']"));
         Assert.Empty(navigation.FindAll("form[action='/account/signout']"));
@@ -144,6 +145,8 @@ public sealed class ComponentTests : BunitContext
         api.Analytics = _ => Task.FromResult(Managed);
         var view = Render<Dashboard>();
         view.WaitForAssertion(() => Assert.Contains("Your links", view.Markup));
+        Assert.DoesNotContain("Updates automatically", view.Markup);
+        Assert.Single(view.FindAll(".link-row-actions"));
         Assert.Equal("My links", view.Find("h1").TextContent);
         Assert.Contains("abc", view.Markup);
         view.Find("#managed-url").Change("https://example.com");

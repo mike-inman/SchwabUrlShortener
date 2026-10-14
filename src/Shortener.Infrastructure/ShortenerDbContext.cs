@@ -11,10 +11,30 @@ public sealed class ShortenerDbContext(DbContextOptions<ShortenerDbContext> opti
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<WorkspaceMembership> WorkspaceMemberships => Set<WorkspaceMembership>();
     public DbSet<WorkspaceInvitation> WorkspaceInvitations => Set<WorkspaceInvitation>();
+    public DbSet<ContactMessage> ContactMessages => Set<ContactMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasPostgresExtension("citext");
+        modelBuilder.Entity<ContactMessage>(entity =>
+        {
+            entity.ToTable("contact_messages");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Email).HasColumnName("email").HasMaxLength(254).IsRequired();
+            entity.Property(x => x.Subject).HasColumnName("subject").HasMaxLength(150);
+            entity.Property(x => x.Message).HasColumnName("message").HasMaxLength(4000).IsRequired();
+            entity.Property(x => x.ClientKeyHash).HasColumnName("client_key_hash").HasMaxLength(64).IsRequired();
+            entity.Property(x => x.NotifiedAtUtc).HasColumnName("notified_at_utc");
+            entity.Property(x => x.FailedAtUtc).HasColumnName("failed_at_utc");
+            entity.Property(x => x.NextAttemptAtUtc).HasColumnName("next_attempt_at_utc");
+            entity.Property(x => x.NotificationAttempts).HasColumnName("notification_attempts");
+            entity.Property(x => x.LastNotificationErrorCode).HasColumnName("last_notification_error_code").HasMaxLength(100);
+            entity.HasIndex(x => new { x.NextAttemptAtUtc, x.CreatedAtUtc }).HasDatabaseName("ix_contact_messages_notification_pending")
+                .HasFilter("notified_at_utc IS NULL AND failed_at_utc IS NULL");
+        });
         modelBuilder.Entity<UrlMapping>(entity =>
         {
             entity.ToTable("url_mappings", table => table.HasCheckConstraint(

@@ -42,6 +42,15 @@ public static class AnalyticsHost
 
         builder.Services.AddSingleton<PostgresClickEventStore>();
         builder.Services.AddSingleton<ClickOutboxPublisher>();
+        var contactNotificationMode = builder.Configuration["ContactNotifications:Mode"] ?? "None";
+        builder.Services.AddSingleton<IContactNotifier>(sp => contactNotificationMode switch
+        {
+            "None" => ActivatorUtilities.CreateInstance<NoContactNotifier>(sp),
+            "AzureCommunicationEmail" => ActivatorUtilities.CreateInstance<AzureCommunicationContactNotifier>(sp),
+            _ => throw new InvalidOperationException("ContactNotifications:Mode must be None or AzureCommunicationEmail.")
+        });
+        builder.Services.AddSingleton<ContactNotificationDispatcher>();
+        builder.Services.AddHostedService<ContactNotificationWorker>();
         builder.Services.AddSingleton<ClickKafkaConsumer>();
         builder.Services.AddHostedService<OutboxWorker>();
         builder.Services.AddHostedService<ConsumerWorker>();

@@ -73,13 +73,13 @@ namespace Shortener.Infrastructure.Migrations
                     b.HasIndex("OwnerWorkspaceId")
                         .HasDatabaseName("ix_url_mappings_owner_workspace");
 
-                    b.HasIndex("OwnerWorkspaceId", "CreatedAtUtc")
-                        .HasDatabaseName("ix_url_mappings_workspace_created")
-                        .HasFilter("mode = 1");
-
                     b.HasIndex("ShortCode")
                         .IsUnique()
                         .HasDatabaseName("ux_url_mappings_short_code");
+
+                    b.HasIndex("OwnerWorkspaceId", "CreatedAtUtc")
+                        .HasDatabaseName("ix_url_mappings_workspace_created")
+                        .HasFilter("mode = 1");
 
                     b.HasIndex("TenantId", "CreatedAtUtc")
                         .HasDatabaseName("ix_url_mappings_tenant_created");
@@ -116,6 +116,75 @@ namespace Shortener.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("application_users", (string)null);
+                });
+
+            modelBuilder.Entity("Shortener.Infrastructure.ContactMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ClientKeyHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("client_key_hash");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(254)
+                        .HasColumnType("character varying(254)")
+                        .HasColumnName("email");
+
+                    b.Property<DateTimeOffset?>("FailedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("failed_at_utc");
+
+                    b.Property<string>("LastNotificationErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("last_notification_error_code");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("message");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("name");
+
+                    b.Property<DateTimeOffset>("NextAttemptAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_attempt_at_utc");
+
+                    b.Property<int>("NotificationAttempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("notification_attempts");
+
+                    b.Property<DateTimeOffset?>("NotifiedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("notified_at_utc");
+
+                    b.Property<string>("Subject")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("subject");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NextAttemptAtUtc", "CreatedAtUtc")
+                        .HasDatabaseName("ix_contact_messages_notification_pending")
+                        .HasFilter("notified_at_utc IS NULL AND failed_at_utc IS NULL");
+
+                    b.ToTable("contact_messages", (string)null);
                 });
 
             modelBuilder.Entity("Shortener.Infrastructure.ExternalIdentity", b =>

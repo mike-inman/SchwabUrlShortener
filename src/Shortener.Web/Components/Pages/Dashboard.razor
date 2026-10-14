@@ -49,7 +49,7 @@ else
     </section>
 
     <section>
-        <div class="section-heading"><h2>Your links</h2><span class="muted">Updates automatically</span></div>
+        <div class="section-heading"><h2>Your links</h2></div>
         @if (reauthRequired)
         {
             <p class="alert alert-warning" role="status">
@@ -90,8 +90,8 @@ else
                                     else { <span class="muted">—</span> }
                                 </td>
                                 <td>@(link.LastAccessedAtUtc?.ToLocalTime().ToString("g") ?? "Never")</td>
-                                <td><button class="btn btn-sm btn-outline-primary" disabled="@busy" aria-label="Details for @link.ShortCode" @onclick="() => ShowDetailsAsync(link.ShortCode)">Details</button>
-                                    @if (Identity.Customer) { <a class="btn btn-sm btn-outline-primary" href="@($"/dashboard/links/{Uri.EscapeDataString(link.ShortCode)}/insights")">Insights</a> }
+                                <td><div class="link-row-actions"><button class="btn btn-sm btn-outline-primary" disabled="@busy" aria-label="Details for @link.ShortCode" @onclick="() => ShowDetailsAsync(link.ShortCode)">Details</button>
+                                    @if (Identity.Customer) { <a class="btn btn-sm btn-outline-primary" href="@($"/dashboard/links/{Uri.EscapeDataString(link.ShortCode)}/insights")">Insights</a> }</div>
                                 </td>
                             </tr>
                         }
