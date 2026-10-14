@@ -132,3 +132,24 @@ Microsoft documents [managed-identity signed assertions in Microsoft.Identity.We
 Read-only subscription-scope what-if with disposable placeholder passwords and Web secret, `infra/p1-preview.bicep`, and `ResourceIdOnly` output predicted **66 creates: one new `rg-schwab-url-shortener`, one subscription-level free `CloudPosture` setting, and 64 resources inside the new group; zero updates and zero deletes**. The 64 include PostgreSQL's two TLS configurations, the shared workbook, and the final lock. What-if is a control-plane prediction, not provider registration, deployment, network validation, RBAC proof, rendered workbook evidence, secure-score evidence, or live recovery test. It showed no existing resource group as a target. The provider-registration gap and the PostgreSQL private-access creation choice require another review immediately before any approved P1 provision.
 
 Three dated runbooks cover private PostgreSQL point-in-time recovery, previous-digest rollback, and gradual secret rotation. They are procedures only and were not exercised. The P1 deployment order and limitations are in `infra/README.md`. P2 Web federation and Track D lag telemetry remain separate work; no application or database was modified.
+
+## 19:50 least-privilege correction and P1 deployment — 2026-10-13
+
+The 19:50 contract was recopied from the canonical checkout. It removes `id-shortener-api` from the `eventhubs-connection` secret readers because API writes to the PostgreSQL outbox and does not use Kafka. `infra/modules/data.bicep` now grants that secret only to `id-shortener-analytics`. The Analytics assignment kept its original `reader-1` name. Main and preview Bicep built and linted without warnings. The read-only what-if predicted **65 creates, zero updates, zero deletes**: the same new resource group, free `CloudPosture` setting, and P1 resources as the 19:35 preview, except for the API's single removed secret-scope role assignment. Its omitted role-assignment ID was `1a32bba5-e873-5220-a135-7fff1b26be6f`; the Analytics assignment ID remains `22869997-e59a-5c43-84a1-0417fdab3256`. Michael's P1 approval is conditional on exactly this difference and applies only to the previewed resources, with the lock last.
+
+### Contract alert map
+
+All authored P1 rules send to `ag-shortener-ops`, whose email receiver is `BUDGET_CONTACT_EMAIL`. A Bicep rule is not live coverage until its deployment and metric evaluation are verified.
+
+| Contract condition | Rule/source | P1 status |
+| --- | --- | --- |
+| API or Web HTTP 5xx above 5% for 5 minutes | P2/Track D request telemetry; rule to be authored after the apps emit requests | Deferred; neither app nor request metric exists in P1 |
+| Any app restarting repeatedly | P2 Container Apps restart telemetry; rule to be authored after apps exist | Deferred; no app exists in P1 |
+| Analytics consumer lag above 1,000 for 10 minutes | Analytics app's own `shortener.analytics.consumer_lag` export and a later alert on that metric | Deferred to Track D export and P2/P3 alert; Event Hubs Standard has no suitable platform lag metric |
+| Oldest unpublished outbox event above 5 minutes | Existing `shortener.clicks.outbox.oldest_seconds` app metric if Track D exports it, otherwise an application log query; later alert | Deferred to Track D export and P2/P3 alert |
+| PostgreSQL CPU above 80% for 10 minutes | `alert-shortener-postgres-cpu`, `cpu_percent`, average, 10-minute window, evaluated each minute | Authored P1 |
+| PostgreSQL connections above 80% of 35 for 10 minutes | `alert-shortener-postgres-connections`, `active_connections`, maximum greater than 28, 10-minute window, evaluated each minute | Authored P1; actual server limit needs live check |
+| Event Hubs ingress above 70% of 1 TU for 10 minutes by bytes | `alert-shortener-eventhubs-ingress-bytes`, `IncomingBytes` total greater than 420,000,000 in 10 minutes, evaluated each minute | Authored P1 |
+| Event Hubs ingress above 70% of 1 TU for 10 minutes by events | `alert-shortener-eventhubs-ingress-messages`, `IncomingMessages` total greater than 420,000 in 10 minutes, evaluated each minute | Authored P1 |
+
+The budget notifications are separate from these operational rules: `budget-shortener` alerts at 50%, 80%, and 100% of its USD 100 monthly amount. The Container Apps environment diagnostic settings and deferred alert rules remain P2/Track D work.

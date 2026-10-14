@@ -230,11 +230,12 @@ resource redisPasswordRead 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   scope: redisPasswordSecret
   properties: { principalId: redisPrincipalId, principalType: 'ServicePrincipal', roleDefinitionId: secretsUserRole }
 }
-resource eventhubsRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (principal, i) in [ apiPrincipalId, analyticsPrincipalId ]: {
-  name: guid(eventhubsSecret.id, 'reader-${i}', secretsUserRole)
+resource eventhubsRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  // Preserve the Analytics assignment's previewed name; remove API's reader-0.
+  name: guid(eventhubsSecret.id, 'reader-1', secretsUserRole)
   scope: eventhubsSecret
-  properties: { principalId: principal, principalType: 'ServicePrincipal', roleDefinitionId: secretsUserRole }
-}]
+  properties: { principalId: analyticsPrincipalId, principalType: 'ServicePrincipal', roleDefinitionId: secretsUserRole }
+}
 resource webClientSecretRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(webClientSecretKv.id, 'web', secretsUserRole)
   scope: webClientSecretKv

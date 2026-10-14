@@ -20,7 +20,7 @@ The subscription-scope [`CloudPosture` Free pricing resource](subscription-found
 
 | Identity | P1 role scopes |
 | --- | --- |
-| API | ACR pull; `pg-app-connection`, `redis-connection`, `eventhubs-connection`; its Data Protection key; Data Protection blob container |
+| API | ACR pull; `pg-app-connection`, `redis-connection`; its Data Protection key; Data Protection blob container |
 | Web | ACR pull; `redis-connection`, `web-client-secret`; its Data Protection key; Data Protection blob container |
 | Analytics | ACR pull; `pg-app-connection`, `redis-connection`, `eventhubs-connection` |
 | Migrate | ACR pull; only `pg-migrate-connection` |
