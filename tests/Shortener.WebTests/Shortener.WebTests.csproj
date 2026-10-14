@@ -16,4 +16,9 @@
     <ProjectReference Include="../../src/Shortener.Web/Shortener.Web.csproj" />
     <ProjectReference Include="../../src/Shortener.Infrastructure/Shortener.Infrastructure.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="../../src/Shortener.Api/appsettings.json" Link="HostSettings/Api/appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/Shortener.Web/appsettings.json" Link="HostSettings/Web/appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/Shortener.Analytics/appsettings.json" Link="HostSettings/Analytics/appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -22,6 +22,9 @@ public sealed class AppSettingsStartupTests
         AssertAppSettingsValue(configuration, "DataProtection:Mode", "Filesystem");
         AssertAppSettingsValue(configuration, "DataProtection:ApplicationName", "Shortener.Web");
         AssertAppSettingsValue(configuration, "TokenCache:Mode", "InMemory");
+        AssertAppSettingsValue(configuration, "LiveUpdates:Mode", "Redis");
+        AssertAppSettingsValue(configuration, "LiveUpdates:Channel", "shortener:links:v1");
+        AssertAppSettingsValue(configuration, "LiveUpdates:DebounceMilliseconds", "1000");
     }
 
     private static void AssertAppSettingsValue(IConfiguration configuration, string key, string expected)
@@ -37,9 +40,6 @@ public sealed class AppSettingsStartupTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
-            builder.UseSetting("LiveUpdates:Mode", "Redis");
-            builder.UseSetting("LiveUpdates:Channel", "shortener:links:v1");
-            builder.UseSetting("LiveUpdates:DebounceMilliseconds", "1000");
             builder.UseSetting("ConnectionStrings:Redis", Environment.GetEnvironmentVariable("ConnectionStrings__Redis") ?? "localhost:6379");
         }
     }

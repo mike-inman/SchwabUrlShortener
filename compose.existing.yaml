@@ -108,6 +108,7 @@ services:
         format: raw
     environment:
       ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Redis: redis:6379,abortConnect=false
     ports:
       - "127.0.0.1:63655:8080"
     volumes:
@@ -134,6 +135,8 @@ services:
     env_file:
       - path: ${SCHWAB_ANALYTICS_ENV_FILE:?Set SCHWAB_ANALYTICS_ENV_FILE to a private Analytics environment file}
         format: raw
+    environment:
+      ConnectionStrings__Redis: redis:6379,abortConnect=false
     networks: [schwab]
     depends_on:
       postgres: { condition: service_healthy }

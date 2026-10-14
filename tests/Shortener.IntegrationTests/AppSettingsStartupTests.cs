@@ -19,6 +19,9 @@ public sealed class AppSettingsStartupTests
         var configuration = factory.Services.GetRequiredService<IConfiguration>();
         AssertAppSettingsValue(configuration, "DataProtection:Mode", "Filesystem");
         AssertAppSettingsValue(configuration, "DataProtection:ApplicationName", "Shortener.Api");
+        AssertAppSettingsValue(configuration, "LiveUpdates:Mode", "Redis");
+        AssertAppSettingsValue(configuration, "LiveUpdates:Channel", "shortener:links:v1");
+        AssertAppSettingsValue(configuration, "LiveUpdates:DebounceMilliseconds", "1000");
     }
 
     private static void AssertAppSettingsValue(IConfiguration configuration, string key, string expected)
@@ -36,8 +39,6 @@ public sealed class AppSettingsStartupTests
             builder.UseEnvironment("Production");
             builder.UseSetting("AzureAd:ClientId", "11111111-1111-1111-1111-111111111111");
             builder.UseSetting("ConnectionStrings:ShortenerDb", "Host=localhost;Database=Schwab_test_local;Username=test");
-            builder.UseSetting("LiveUpdates:Mode", "Redis");
-            builder.UseSetting("LiveUpdates:Channel", "shortener:links:v1");
             builder.UseSetting("ConnectionStrings:Redis", "localhost:6379");
         }
     }
