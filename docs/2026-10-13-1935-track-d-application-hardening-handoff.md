@@ -1,5 +1,5 @@
 ## Track D — Application Hardening Handoff
-Status: drafted on 2026-10-13 19:35 CDT. **Start only after Track B has merged to `main`.**
+Status: drafted on 2026-10-13 19:35 CDT. **Revised 2026-10-14 07:40 CDT: added items 0 (vulnerable packages, do first) and 7 (`www` redirect).** Track B has merged; start now.
 You are working in /Users/michaelinman/Repos/SchwabUrlShortener-hardening.
 
 Follow these repo standards exactly:
@@ -21,6 +21,7 @@ Important context:
 - `ClickAnalyticsMetrics` and Track B's `LiveUpdateMetrics` define meters, and the outbox stores a `trace_id`, but nothing exports telemetry. Track C sets `APPLICATIONINSIGHTS_CONNECTION_STRING` on every app. Slice 7 recorded per-event trace correlation as unverified.
 
 In scope only:
+0. **Do first — vulnerable packages (CI blocker).** Track F's CI vulnerability gate (draft PR #2, run 38562714387) fails on four High advisories in transitive `System.Security.Cryptography.Pkcs` and `System.Security.Cryptography.Xml` version `10.0.10` (10 project/framework occurrences). Run `dotnet list SchwabUrlShortener.slnx package --vulnerable --include-transitive`, identify which direct references pull them in, and resolve to the lowest patched versions: prefer updating the direct parent packages; otherwise pin the patched versions centrally (for example `Directory.Packages.props` with transitive pinning, or explicit `PackageReference` overrides in the affected projects). Record each advisory ID, the old and new versions, and the URL. Rebuild with zero warnings, rerun unit and Web tests, confirm `--vulnerable --include-transitive` reports no High or Critical findings, and commit this as its own commit before any other item, so it can be cherry-picked or merged on its own if Michael asks.
 1. Non-root containers (S1): add `USER $APP_UID` to the `web`, `api`, and `analytics` runtime stages. Ensure the Data Protection `Filesystem` path is writable by that user. Update the Data Protection volume mount paths in `compose.yaml`, `compose.scaleout.yaml`, and `compose.existing.yaml` to the `app` user's home, keeping the same named volumes so existing local keys are preserved; confirm file ownership works on a fresh and on an existing volume, and document any one-time step needed for existing local volumes.
 2. Rate limiting (S2): ASP.NET Core rate limiting in API and Web, keyed on the client IP after forwarded headers. Policies, all configuration-driven under `RateLimiting__*` with local defaults in `appsettings.json`:
    - `guest-create`: fixed window, 10 requests per minute per client, on `POST /api/urls/guest` and Web's guest creation handler.
@@ -35,6 +36,7 @@ In scope only:
 4. OpenTelemetry (P1, P3): add the Azure Monitor OpenTelemetry distro (`Azure.Monitor.OpenTelemetry.AspNetCore` for API and Web; the matching exporter setup for Analytics) when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set, and no exporter when it is unset (local). Export ASP.NET Core, HttpClient, Npgsql, and Redis traces where instrumentation exists; the meters `Shortener.*` used by `ClickAnalyticsMetrics` and `LiveUpdateMetrics`; and logs. Set the service name per app (`shortener-api`, `shortener-web`, `shortener-analytics`). Configure sampling (`OpenTelemetry__SamplingRatio`, default `1.0` locally, `0.25` recommended for Azure) and record the reasoning against the 1 GB/day log cap.
 5. Trace correlation across the pipeline: the API's redirect activity's trace context is stored with the outbox row (the existing `trace_id` field, using W3C `traceparent`), carried in the Kafka message headers by the outbox publisher, and restored as the parent of the Analytics consumer's processing activity. One click must appear as a single end-to-end trace in Application Insights.
 6. Tests for each item: the container user, rate-limit rejections and exemptions, headers present on representative responses, exporter disabled without a connection string, and trace context propagated from outbox row to Kafka header to consumer activity.
+7. **`www.ziplio.io` → `https://ziplio.io` redirect.** Track C found the Container Apps HTTP route cannot issue a host-level redirect (only prefix rewrite), so the application does it: in Web and API, when the request host (after forwarded headers) is `www.` followed by the configured public host, return 301 to `https://<public host>` with path and query preserved. The public host comes from `PublicLinks:BaseUrl`; no hostnames hard-coded. Health endpoints are exempt. Add tests for path and query preservation, a non-`www` host passing through, and the health exemption. Track C enables it in Azure with the rest of your settings.
 
 Out of scope:
 - Azure resources (Track C) and GitHub workflows (Track F).
@@ -68,6 +70,8 @@ Documentation:
 - Update the review file's status column for S1, S2, S3, P1, and P3, and update README surgically.
 
 Completion criteria:
+- [ ] No High or Critical vulnerable packages; CI vulnerability gate passes.
+- [ ] `www` redirects to the apex with path and query preserved.
 - [ ] Containers run as non-root, with Data Protection keys preserved for existing local volumes.
 - [ ] Rate limits on guest create, redirects, and managed endpoints, configuration-driven, with 429 and `Retry-After`.
 - [ ] Security headers on Web and API, with sign-in, dashboard, and live updates still working.
