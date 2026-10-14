@@ -160,6 +160,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
           { name: 'ConnectionStrings__ShortenerDb', secretRef: 'pg-app-connection' }
           { name: 'ConnectionStrings__Redis', secretRef: 'redis-connection' }
           { name: 'VisitorHash__DailySecret', secretRef: 'visitor-hash-secret' }
+          { name: 'OpenTelemetry__SamplingRatio', value: '0.25' }
           { name: 'Identity__Mode', value: commonIdentityEnv }
           { name: 'AzureAd__Instance', value: 'https://schwaburlshortener.ciamlogin.com/' }
           { name: 'AzureAd__TenantId', value: '6adc36e9-dfe5-469f-8aed-6ef83abcdd19' }
@@ -214,6 +215,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
         env: concat([
           { name: 'AZURE_CLIENT_ID', value: webId.properties.clientId }
           { name: 'ConnectionStrings__Redis', secretRef: 'redis-connection' }
+          { name: 'OpenTelemetry__SamplingRatio', value: '0.25' }
           { name: 'Identity__Mode', value: commonIdentityEnv }
           { name: 'AzureAd__Instance', value: 'https://schwaburlshortener.ciamlogin.com/' }
           { name: 'AzureAd__Authority', value: 'https://schwaburlshortener.ciamlogin.com/6adc36e9-dfe5-469f-8aed-6ef83abcdd19/v2.0' }
@@ -275,6 +277,7 @@ resource analytics 'Microsoft.App/containerApps@2024-03-01' = {
           { name: 'AZURE_CLIENT_ID', value: analyticsId.properties.clientId }
           { name: 'ConnectionStrings__ShortenerDb', secretRef: 'pg-app-connection' }
           { name: 'ConnectionStrings__Redis', secretRef: 'redis-connection' }
+          { name: 'OpenTelemetry__SamplingRatio', value: '0.25' }
           { name: 'Kafka__BootstrapServers', value: '${eventhubsName}.servicebus.windows.net:9093' }
           { name: 'Kafka__Topic', value: 'managed-clicks-v2' }
           { name: 'Kafka__ConsumerGroup', value: 'shortener-analytics-v1' }
