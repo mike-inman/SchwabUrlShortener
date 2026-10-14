@@ -8,10 +8,10 @@ spec = importlib.util.spec_from_file_location('configure_entra', Path(__file__).
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
-CONFIG = {'localRedirectUris': ['https://localhost:7130/signin-oidc'],
+CONFIG = {'localRedirectUris': ['https://localhost:63656/signin-oidc', 'https://localhost:63656/signout-callback-oidc'],
           'callbackPaths': ['/signin-oidc', '/signout-callback-oidc']}
 PUBLIC = 'routeshortener.happysand-837faf44.centralus.azurecontainerapps.io'
-BASE = ['https://localhost:7130/signin-oidc'] + [f'https://{PUBLIC}{path}' for path in CONFIG['callbackPaths']]
+BASE = CONFIG['localRedirectUris'] + [f'https://{PUBLIC}{path}' for path in CONFIG['callbackPaths']]
 
 
 class RedirectReconciliationTests(unittest.TestCase):

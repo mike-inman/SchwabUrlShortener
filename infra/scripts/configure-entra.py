@@ -16,8 +16,8 @@ GRAPH = 'https://graph.microsoft.com/v1.0'
 HOST_RE = re.compile(r'^(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])$')
 
 
-def command(args):
-    result = subprocess.run(args, text=True, capture_output=True)
+def command(args, env=None):
+    result = subprocess.run(args, text=True, capture_output=True, env=env)
     if result.returncode:
         raise RuntimeError(f'{args[0]} command failed with exit code {result.returncode}; output suppressed')
     return result.stdout
@@ -43,16 +43,23 @@ def hostname(raw, label):
 
 
 def graph(method, path, body=None):
+    # Graph is always scoped to the separate External ID CLI profile. Never
+    # switch or overwrite the default Azure-resource profile.
+    env = os.environ.copy()
+    env['AZURE_CONFIG_DIR'] = env.get('ENTRA_AZURE_CONFIG_DIR', str(Path.home() / '.azure-ziplio'))
+    account = json.loads(command(['az', 'account', 'show', '-o', 'json'], env=env))
+    if account.get('tenantId') != '6adc36e9-dfe5-469f-8aed-6ef83abcdd19':
+        raise RuntimeError('separate Entra CLI profile is not signed into the Ziplio External ID tenant')
     args = ['az', 'rest', '--method', method, '--url', GRAPH + path, '-o', 'json']
     if body is None:
-        return json.loads(command(args))
+        return json.loads(command(args, env=env))
     fd, filename = tempfile.mkstemp(prefix='shortener-entra-', suffix='.json')
     os.close(fd)
     os.chmod(filename, 0o600)
     try:
         Path(filename).write_text(json.dumps(body), encoding='utf-8')
         args += ['--headers', 'Content-Type=application/json', '--body', '@' + filename]
-        output = command(args)
+        output = command(args, env=env)
         return json.loads(output) if output.strip() else {}
     finally:
         Path(filename).unlink(missing_ok=True)
@@ -110,30 +117,6 @@ def reconcile_redirects(config, current, public_host, custom_domain, previous_cu
     return sorted(add), sorted(remove), sorted(unknown), effective
 
 
-def preview_federation(config, object_id, resource_group):
-    declared = config['federatedCredential']
-    identity = json.loads(command(['az', 'identity', 'show', '-g', resource_group,
-                                   '-n', declared['managedIdentityName'], '-o', 'json']))
-    subject = identity.get('principalId')
-    if not subject or identity.get('tenantId') != 'eea269ab-1571-48a5-a18c-824ba5859cd5':
-        raise RuntimeError('Web identity missing or in a different tenant')
-    existing = graph('get', f'/applications/{object_id}/federatedIdentityCredentials').get('value', [])
-    name = declared['name']
-    matching = [entry for entry in existing if entry.get('name') == name]
-    if len(matching) > 1:
-        raise RuntimeError('duplicate owned federated credential names; review required')
-    expected = {'name': name, 'issuer': declared['issuer'], 'subject': subject,
-                'audiences': declared['audiences']}
-    if matching:
-        actual = matching[0]
-        if any(actual.get(key) != value for key, value in expected.items()):
-            raise RuntimeError('owned federated credential differs; review required')
-        print('Federated credential: no changes')
-        return None
-    if any(entry.get('issuer') == expected['issuer'] and entry.get('subject') == subject for entry in existing):
-        raise RuntimeError('matching issuer and subject already use another name; review required')
-    print(f'Federated credential: add {name} for id-shortener-web')
-    return expected
 
 
 def main():
@@ -142,7 +125,6 @@ def main():
     mode.add_argument('--dry-run', action='store_true')
     mode.add_argument('--apply', action='store_true')
     parser.add_argument('--simulate-custom-domain', metavar='HOST', help='dry-run only; never changes azd')
-    parser.add_argument('--include-federation', action='store_true', help='preview or reconcile the Web identity credential')
     args = parser.parse_args()
     if args.simulate_custom_domain and not args.dry_run:
         parser.error('--simulate-custom-domain requires --dry-run')
@@ -172,12 +154,6 @@ def main():
     for uri in remove: print('REMOVE ' + safe_uri(uri))
     for uri in unknown: print('KEEP unrecognized URI: ' + safe_uri(uri))
     if not add and not remove: print('Redirect URIs: no changes')
-    federation = None
-    if args.include_federation:
-        resource_group = azd_value('AZURE_RESOURCE_GROUP')
-        if not resource_group:
-            raise RuntimeError('AZURE_RESOURCE_GROUP is required for federation')
-        federation = preview_federation(config, app['id'], resource_group)
     if args.dry_run:
         print('Dry run: no Entra writes')
         return
@@ -187,11 +163,7 @@ def main():
         if set(verified) != set(effective):
             raise RuntimeError('Graph PATCH did not produce the previewed redirect URI set')
         print('Redirect URIs: applied and verified')
-    if federation:
-        graph('post', f'/applications/{app["id"]}/federatedIdentityCredentials', federation)
-        preview_federation(config, app['id'], resource_group)
-        print('Federated credential: applied and verified')
-    if not add and not remove and not federation:
+    if not add and not remove:
         print('Apply: no changes')
 
 

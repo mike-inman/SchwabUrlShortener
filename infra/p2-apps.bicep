@@ -71,7 +71,7 @@ var publicHost = '${routeName}.${environment.properties.defaultDomain}'
 var vaultBase = 'https://${vault.name}.vault.azure.net/secrets/'
 var dpBlobBase = 'https://${dpStorage.name}.blob.core.windows.net/dataprotection/'
 var dpKeyBase = 'https://${vault.name}.vault.azure.net/keys/'
-var commonIdentityEnv = 'Workforce'
+var commonIdentityEnv = 'Customer'
 var appInsightsEnv = [ { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights.properties.ConnectionString } ]
 
 resource redis 'Microsoft.App/containerApps@2024-03-01' = {
@@ -144,8 +144,8 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
           { name: 'ConnectionStrings__ShortenerDb', secretRef: 'pg-app-connection' }
           { name: 'ConnectionStrings__Redis', secretRef: 'redis-connection' }
           { name: 'Identity__Mode', value: commonIdentityEnv }
-          { name: 'AzureAd__Instance', value: 'https://login.microsoftonline.com/' }
-          { name: 'AzureAd__TenantId', value: 'organizations' }
+          { name: 'AzureAd__Instance', value: 'https://schwaburlshortener.ciamlogin.com/' }
+          { name: 'AzureAd__TenantId', value: '6adc36e9-dfe5-469f-8aed-6ef83abcdd19' }
           { name: 'AzureAd__ClientId', value: apiClientId }
           { name: 'AllowedHosts', value: 'ca-shortener-api.${environment.properties.defaultDomain};ca-shortener-api;${publicHost}' }
           { name: 'PublicLinks__BaseUrl', value: 'https://${publicHost}/' }
@@ -198,10 +198,12 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
           { name: 'AZURE_CLIENT_ID', value: webId.properties.clientId }
           { name: 'ConnectionStrings__Redis', secretRef: 'redis-connection' }
           { name: 'Identity__Mode', value: commonIdentityEnv }
-          { name: 'AzureAd__Instance', value: 'https://login.microsoftonline.com/' }
-          { name: 'AzureAd__TenantId', value: 'organizations' }
+          { name: 'AzureAd__Authority', value: 'https://schwaburlshortener.ciamlogin.com/6adc36e9-dfe5-469f-8aed-6ef83abcdd19/v2.0' }
+          { name: 'AzureAd__TenantId', value: '6adc36e9-dfe5-469f-8aed-6ef83abcdd19' }
           { name: 'AzureAd__ClientId', value: webClientId }
           { name: 'AzureAd__ClientSecret', secretRef: 'web-client-secret' }
+          { name: 'AzureAd__CallbackPath', value: '/signin-oidc' }
+          { name: 'AzureAd__SignedOutCallbackPath', value: '/signout-callback-oidc' }
           { name: 'ShortenerApi__Scope', value: 'api://${apiClientId}/access_as_user' }
           { name: 'ShortenerApi__BaseUrl', value: 'http://ca-shortener-api/' }
           { name: 'ShortenerApi__AllowedInternalHttpHosts', value: 'ca-shortener-api' }
@@ -318,8 +320,8 @@ resource migration 'Microsoft.App/jobs@2024-03-01' = {
           { name: 'AZURE_CLIENT_ID', value: migrateId.properties.clientId }
           { name: 'ConnectionStrings__ShortenerDb', secretRef: 'pg-migrate-connection' }
           { name: 'Identity__Mode', value: commonIdentityEnv }
-          { name: 'AzureAd__Instance', value: 'https://login.microsoftonline.com/' }
-          { name: 'AzureAd__TenantId', value: 'organizations' }
+          { name: 'AzureAd__Instance', value: 'https://schwaburlshortener.ciamlogin.com/' }
+          { name: 'AzureAd__TenantId', value: '6adc36e9-dfe5-469f-8aed-6ef83abcdd19' }
           { name: 'AzureAd__ClientId', value: apiClientId }
         ]
         resources: { cpu: json('0.25'), memory: '0.5Gi' }
