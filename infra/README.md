@@ -1,37 +1,46 @@
-# Azure staging infrastructure — 2026-10-13
+# Azure infrastructure — 2026-10-13
 
-This directory implements the [Azure scale-out contract](../docs/2026-10-13-1720-azure-scaleout-contract.md) for `rg-shortener-staging`. Read the [validation record](../docs/2026-10-13-1757-track-c-azure-infrastructure-validation.md) before running any deployment. The 18:10 contract includes each app's origin FQDN in `AllowedHosts`.
+This directory implements the [lean Azure contract](../docs/2026-10-13-1720-azure-scaleout-contract.md) for the single `prod` environment in `rg-schwab-url-shortener`, `centralus`. Read the [validation record](../docs/2026-10-13-1757-track-c-azure-infrastructure-validation.md) before provisioning. The retired staging resource group must never be recreated. The local `.azure/staging` folder is preserved at Michael's request.
 
-## Parameters and environment
+## Design principles
 
-`infra/main.bicep` is the entry point. `main.staging.bicepparam` records the initial staging values and the commented Track A scale set. `main.parameters.json` maps azd environment values into the Bicep deployment. `azure.yaml` uses prebuilt digest images and invokes `scripts/build-images.sh` before `azd deploy`.
+Expected load is low, so warm API/Web/Analytics replicas and one Event Hubs throughput unit serve ordinary traffic. Container Apps autoscale must expand and retract replicas under measured load; Event Hubs auto-inflate is disabled because it only raises capacity. Private PostgreSQL, subnet service endpoints, managed identities, RBAC, TLS, and Key Vault retain security on the small budget. Pool size 2 and ingress alerts protect the B1ms and Event Hubs limits. A bounded anonymous-redirect demo must show scale-out and scale-in. Each lean resource and its upgrade are listed below.
 
-The azd environment must target the confirmed subscription and exactly `rg-shortener-staging`. Required values before C1 are `AZURE_LOCATION=centralus`, `DEPLOYMENT_PHASE=foundation`, `API_CLIENT_ID` (the existing Entra API app registration ID), `REDIS_SKU=Balanced_B0`, and nonsecret bootstrap values for `SERVICE_API_IMAGE`, `SERVICE_WEB_IMAGE`, and `SERVICE_ANALYTICS_IMAGE`. The `main.parameters.json` mapping also requires a `POSTGRES_PASSWORD` azd environment value; it may be a nonsecret bootstrap placeholder for foundation only and must be replaced with a real password before C2. Michael enters the real password without displaying it. Set `BUDGET_CONTACT_EMAIL` to an alert address or an empty value, and `CUSTOM_DOMAIN` to an approved staging hostname or an empty value. Empty `CUSTOM_DOMAIN` uses the Azure Front Door endpoint hostname. `POSTGRES_PASSWORD` is a secure Bicep parameter and is not written into the repository.
+## P1: foundation and data
 
-Use `Balanced_B1` only if the B0 SKU is unavailable in `centralus`; use `eastus2` only when a required SKU is unavailable in `centralus`. Check region availability and role assignments before provisioning. The three image values can be `bootstrap-unset` while `DEPLOYMENT_PHASE=foundation`, because no apps are created in that phase.
+`main.bicep` and `main.parameters.json` are the azd entry point. They currently accept only `DEPLOYMENT_PHASE=p1`. `p1-preview.bicep` is a subscription-scope **what-if only** wrapper so a new resource group and all of P1 can be previewed together; never deploy the wrapper. `resource-group.bicep` defines only the resource group for a later, approved deployment. `main.prod.bicepparam` supports offline compilation and local review without placing values in source control.
 
-## Phased workflow
+The `prod` azd environment holds `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `AZURE_LOCATION`, `DEPLOYMENT_PHASE`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `WEB_CLIENT_SECRET`, `BUDGET_CONTACT_EMAIL`, `API_CLIENT_ID`, `WEB_CLIENT_ID`, and the current `OPERATOR_PUBLIC_IP`. The password and client-secret values are local, private azd values; never print, log, or commit them. P1 uses those secure values and the budget contact to create Key Vault secrets. P2 will use `API_CLIENT_ID` for `AzureAd__ClientId` on API and the migration job, and `WEB_CLIENT_ID` plus the Key Vault Web secret for Web. Check account and subscription before any Azure write. Michael approves each phase after a new what-if. Provider registration and resource creation are part of the P1 approval, not this offline slice.
 
-1. C1: confirm subscription, account, access, and that `rg-shortener-staging` does not already exist. Preview its creation with `az deployment sub what-if --location centralus --template-file infra/resource-group.bicep`, then create only that new group. Preview foundation changes with `azd provision --preview` before provisioning. Do not modify any existing resource group. The foundation creates ACR before any image build.
-2. C2: Michael sets the real PostgreSQL password without displaying it. Set `DEPLOYMENT_PHASE=data`, preview, then provision private data services. Verify each private endpoint and secret name without reading values.
-3. From a clean committed tree, run `infra/scripts/build-images.sh`. It runs `az acr build --target` for `api`, `web`, and `analytics`, finds each digest, and stores `SERVICE_*_IMAGE` in the active azd environment. A given Git commit reuses its existing ACR tag and digest. The script must never receive secrets as build args.
-4. C3: set `DEPLOYMENT_PHASE=apps`, preview, then provision. Run `azd deploy`; its `predeploy` hook verifies or builds the same digest images. The migration job uses the API digest. Start `caj-shortener-migrate-stg` once per release with `az containerapp job start --resource-group rg-shortener-staging --name caj-shortener-migrate-stg`, then inspect its execution status before allowing traffic. This job uses the direct PostgreSQL port and must not run concurrently with another migration.
-5. C4: after the apps are healthy, set `DEPLOYMENT_PHASE=edge`, preview, then provision. Validate public routes and a WebSocket upgrade through Front Door. A custom domain additionally requires the DNS validation and certificate steps in the Azure portal.
+P1 creates the private PostgreSQL server, VNet and DNS, Event Hubs Standard at fixed 1 TU, Key Vault, ACR Basic, Data Protection storage, separate Redis Azure Files storage, five service identities, logging, budget, and feasible PostgreSQL and Event Hubs ingress alerts. The app PostgreSQL secret includes `Maximum Pool Size=2`. At maximum planned scale the connection budget is API `5×2=10`, Analytics `4×(2+1)=12` (the readiness check has a separate pool), migration `1`, total **23 of 35 user connections**. The PostgreSQL alert fires above 28 active connections (80% of 35) for 10 minutes. Separate Event Hubs alerts fire when average ingress over 10 minutes exceeds 0.7 MB/s or 700 events/s. Verify the server's actual `max_connections` and reserved slots after provisioning.
 
-The active staging replica set is API 1/1, Web 1/1, Analytics 0/0. The commented Track A set in `main.staging.bicepparam` is API 2/10, Web 2/6, Analytics 1/32. `enableScaleOutSettings=false` keeps Track A and B settings out of today's images. Enable it only after their code has merged. Track A confirmed Event Hubs idempotent Kafka producer support from Microsoft documentation, so `Kafka__EnableIdempotence=true` is staged behind that switch.
+| Identity | P1 role scopes |
+| --- | --- |
+| API | ACR pull; `pg-app-connection`, `redis-connection`, `eventhubs-connection`; its Data Protection key; Data Protection blob container |
+| Web | ACR pull; `redis-connection`, `web-client-secret`; its Data Protection key; Data Protection blob container |
+| Analytics | ACR pull; `pg-app-connection`, `redis-connection`, `eventhubs-connection` |
+| Migrate | ACR pull; only `pg-migrate-connection` |
+| Redis | Only `redis-password` |
 
-## Secrets and diagnosis
+Each secret and key grant is scoped to that individual resource. There is no vault-wide grant. A proxy identity is created in P2 only if proxy routing is chosen and has no Key Vault access.
 
-Key Vault holds `pg-app-connection`, `pg-migrate-connection`, `redis-connection`, and `eventhubs-connection`. App and job definitions use Key Vault references with their own user-assigned identities. Review names and access status only; do not list secret values. PostgreSQL's app connection uses PgBouncer port 6432 and `No Reset On Close=true`; migration uses port 5432.
+The Event Hubs Standard tier has no platform `ConsumerLag` metric. Its lag alert and the app 5xx, restart, and outbox alerts require app/log telemetry in P2/P3. Do not count them as active P1 coverage. See the validation record for the contract discrepancy.
 
-Log Analytics receives container console logs. A useful starting KQL query is:
+## Later phases
 
-```kusto
-ContainerAppConsoleLogs_CL
-| where TimeGenerated > ago(1h)
-| where Log_s has "Service started"
-| project TimeGenerated, ContainerAppName_s, Log_s
-| order by TimeGenerated desc
-```
+- P2: author the Container Apps environment, routing, Redis, API, Web, Analytics, and migration job; preview and obtain separate approval. Use prebuilt images by digest from `scripts/build-images.sh`. Keep `enableScaleOutSettings=false` until Tracks A and B merge. API and migration job receive `AzureAd__ClientId` from `API_CLIENT_ID`, each with its own identity. Web runs `Identity__Mode=Workforce` with `WEB_CLIENT_ID` and the Key Vault `web-client-secret`. Redis uses its own managed identity for the raw password and an Azure Files mount.
+- P3: after Tracks A and B merge, set `Kafka__EnableIdempotence=true`, enable scale-out settings, and run the approved anonymous redirect scale demonstration against one managed demo link. It must measure replica and consumer-lag movement without directly editing an application database.
 
-The exact table and column casing must be verified against the deployed workspace. Application Insights receives a connection string for later OpenTelemetry instrumentation; this track does not add exporters to application code.
+P2 routing must be decided from current Container Apps documentation and verified for WebSocket and sticky-session support. The old Front Door and staging templates were removed from the active infrastructure tree; their history remains in Git.
+
+## Production upgrade path
+
+| Lean choice | Upgrade |
+| --- | --- |
+| PostgreSQL B1ms, single zone, 7-day backups | General Purpose with HA and PgBouncer after measuring connections and cost |
+| Event Hubs Standard, fixed one throughput unit | Raise throughput units deliberately after the ingress alert fires; add app-emitted lag telemetry |
+| Redis container with Azure Files | Managed Redis when regional capacity and budget permit |
+| Service endpoints for Key Vault, Storage, Event Hubs | Private endpoints and tighter egress controls |
+| ACR Basic | Upgrade tier for geo-replication or higher throughput |
+| One region and Log Analytics 1 GB/day cap | Multi-region recovery and a higher log cap with cost alerts |
+| Azure budget alerts | Add billing review and operational paging; budget alerts do not cap spend |

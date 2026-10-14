@@ -1,4 +1,6 @@
-# Track C Azure infrastructure validation — 2026-10-13 17:57 CDT (updated 18:32 CDT)
+# Track C Azure infrastructure validation — 2026-10-13 17:57 CDT (updated for 19:20 contract)
+
+The earlier staging sections and initial P1 preview below are historical. The **current single-environment P1 state** is in the final dated section. The staging group was deleted with Michael's approval; never recreate it.
 
 ## State and boundary
 
@@ -66,3 +68,51 @@ The immediate operator action is to resolve Managed Redis Balanced B0/B1 capacit
 - [azd schema: prebuilt Container Apps images and predeploy hooks](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/azd-schema); [azd environment substitution](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/manage-environment-variables); [ACR build target and build arguments](https://learn.microsoft.com/en-us/cli/azure/acr).
 - [PostgreSQL PgBouncer](https://learn.microsoft.com/en-us/azure/postgresql/connectivity/concepts-pgbouncer); [PostgreSQL private endpoint](https://learn.microsoft.com/en-us/azure/postgresql/network/how-to-networking-servers-deployed-public-access-add-private-endpoint); [Managed Redis Bicep resource](https://learn.microsoft.com/en-us/azure/templates/microsoft.cache/2025-07-01/redisenterprise); [Managed Redis database Bicep resource](https://learn.microsoft.com/en-us/azure/templates/microsoft.cache/2025-07-01/redisenterprise/databases); [Managed Redis private link](https://learn.microsoft.com/en-us/azure/redis/private-link).
 - [Event Hubs tier/private link comparison](https://learn.microsoft.com/en-us/azure/event-hubs/compare-tiers); [Container Apps scaling](https://learn.microsoft.com/en-us/azure/container-apps/scale-app); [KEDA Kafka scaler authentication](https://keda.sh/docs/2.21/scalers/apache-kafka/); [Container Apps sticky sessions](https://learn.microsoft.com/en-us/azure/container-apps/sticky-sessions); [Front Door WebSocket support](https://learn.microsoft.com/en-us/azure/frontdoor/standard-premium/websocket).
+
+## Initial single-environment P1 preview — 2026-10-13 19:05 CDT (superseded)
+
+### Scope and state
+
+- Worktree: `/Users/michaelinman/Repos/SchwabUrlShortener-infra`, branch `codex/azure-infra`. The authoritative contract was recopied at its 19:05 revision and handoff at 19:00, and committed as `821d73b`. This section supersedes the staging design above.
+- Read-only account check matched subscription `baaf4acd-ff40-43d1-a7ba-6089a2c4f41e`, tenant `eea269ab-1571-48a5-a18c-824ba5859cd5`, account `social@mediaraq.com`, state Enabled. `rg-schwab-url-shortener` is still absent. No provider was registered and no Azure resource was created by this P1 preparation.
+- `Microsoft.EventHub` and `Microsoft.DBforPostgreSQL` are still NotRegistered; the other P1 providers were previously read as Registered. Provider registration requires P1 approval.
+- Local azd `prod` targets the confirmed subscription, `centralus`, and the new group. `POSTGRES_PASSWORD`, `BUDGET_CONTACT_EMAIL`, and `API_CLIENT_ID` were copied from local `staging` without displaying their values. `REDIS_PASSWORD` was generated privately. The local staging azd folder remains intact at Michael's request. No secret was printed, committed, or sent to Azure in the what-if; it used disposable placeholders.
+
+### P1 Bicep and preview
+
+- P1 contains the VNet `10.60.0.0/16`, ACA subnet `10.60.0.0/23` with Storage/KeyVault/EventHub service endpoints, delegated PostgreSQL subnet `10.60.2.0/24`, and linked private DNS zone. The compiled PostgreSQL resource has `Standard_B1ms`, version 17, `publicNetworkAccess: Disabled`, a delegated subnet and private DNS zone. This is offline template evidence, not a live network test.
+- P1 also includes Log Analytics with 1 GB/day cap, workspace Application Insights, ACR Basic, RBAC Key Vault with purge protection, four managed identities including a dedicated Redis identity, separate Data Protection and Redis storage accounts, the `redis-data` Azure Files share, Data Protection keys, private PostgreSQL database, Event Hubs Standard and `managed-clicks-v2`, five named Key Vault secrets, a $100 monthly budget with 50/80/100% email alerts, diagnostics for PostgreSQL/Event Hubs/Key Vault, one action group, and PostgreSQL CPU/connections alerts.
+- PostgreSQL app secret uses `Maximum Pool Size=2`. At planned maximum replicas: API `5×2=10`, Analytics `4×(2+1)=12` including its separate readiness-check pool, migration `1`; total **23 of 35 user connections**, leaving 12. The active-connections alert threshold is 28, which is 80% of 35. The actual server setting and reserved slots must be checked after provisioning. [Microsoft's limits](https://learn.microsoft.com/en-us/azure/postgresql/configure-maintain/concepts-limits) give B1ms 35 available user connections.
+- `az bicep build` and `az bicep lint` passed for `main.bicep` and `p1-preview.bicep` with zero warnings; `resource-group.bicep` built cleanly. `main.prod.bicepparam` compiled with disposable placeholders, its output discarded. `git diff --check` passed.
+- Read-only subscription-scope what-if used `infra/p1-preview.bicep` and disposable placeholder passwords. It predicted **one new resource group and 42 creates inside it, zero updates and zero deletes**. Thirteen secret/key/container RBAC assignments were marked `Unsupported` by what-if because managed identity principal IDs are known only during deployment; those assignments exist in Bicep but are not confirmed by preview. No existing group was targeted. The preview contained the private PostgreSQL resource; the compiled template check above confirms its no-public-access properties.
+
+### Monitoring discrepancy and phase boundary
+
+- The authoritative contract asks for Analytics `ConsumerLag >1,000` on Event Hubs Standard. [Microsoft's Event Hubs monitoring reference](https://learn.microsoft.com/en-us/azure/event-hubs/monitor-event-hubs-reference) says `ConsumerLag` application metric logs are only available on Premium/Dedicated, and the [Standard namespace metric list](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-eventhub-namespaces-metrics) has no `ConsumerLag` platform metric. A Standard namespace metric alert would never establish the required coverage, so it was removed from P1. A real lag source or tier change must be decided before calling that alert complete.
+- API/Web 5xx and restart alerts require P2 Container Apps; outbox age requires an application log or exported metric. They are tracked for P2/P3 and are not part of the 42 P1 creates. Container Apps environment diagnostics also wait for the P2 environment. P1 has only the PostgreSQL CPU and connection rules, with the shared email action group.
+- P2 routing, digest images, migration, API client wiring, Redis persistence restart test, WebSocket test, guest/managed link flow, and live Entra sign-in have not been run. P3's scale demo will use **anonymous redirects of one managed demo link**, record replica and lag movement, and never write link or click rows directly to the database.
+- The free trial's end date was not exposed by the checked CLI and needs Michael's billing-portal check. A calculator-based monthly estimate is not yet recorded; the contract's USD 40–70 range is a target, not a verified quote. The USD 100 budget is an alert threshold, not a spend cap.
+
+### Approval gate
+
+P1 approval would authorize registering the two missing providers and creating resources **only** in the new `rg-schwab-url-shortener`, after a fresh account/group check and what-if. PostgreSQL private access is a creation-time choice. No P1 deployment has been performed.
+
+## Final P1 preview for the contract marked 19:20 CDT — 2026-10-13
+
+The 19:10, 19:15, and 19:20 contract/handoff amendments were recopied and committed separately as `d58596d` and `939e9d4`. This section supersedes the earlier 42-create preview. The local `prod` azd environment now also contains the nonsecret `WEB_CLIENT_ID`; `WEB_CLIENT_SECRET` is **pending Michael's hidden local entry**. The final what-if used a disposable placeholder for it and for the passwords; no real secret was submitted or displayed. P1 must not be provisioned with a placeholder.
+
+The Bicep has Event Hubs Standard at **fixed 1 throughput unit, auto-inflate disabled**. Two independent 10-minute average ingress alerts cover 420,000,000 bytes and 420,000 messages per window, corresponding to roughly 0.7 MB/s and 700 events/s. The shared action group sends to the budget contact. [Azure's supported Event Hubs metrics](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-eventhub-namespaces-metrics) list `IncomingBytes` and `IncomingMessages` at one-minute granularity and Total aggregation. The Standard-tier consumer-lag discrepancy recorded above remains open for P2/P3.
+
+P1 has **one identity per service**: API, Web, Analytics, migration job, and Redis. A proxy identity is conditional on a P2 routing decision. Static Bicep review shows these exact grants:
+
+| Identity | ACR pull | Key Vault Secrets User, individual secret scopes | Other individual scopes |
+| --- | --- | --- | --- |
+| `id-shortener-api` | Yes | `pg-app-connection`, `redis-connection`, `eventhubs-connection` | Crypto User on `dataprotection-api`; Blob Data Contributor on `dataprotection` |
+| `id-shortener-web` | Yes | `redis-connection`, `web-client-secret` | Crypto User on `dataprotection-web`; Blob Data Contributor on `dataprotection` |
+| `id-shortener-analytics` | Yes | `pg-app-connection`, `redis-connection`, `eventhubs-connection` | None |
+| `id-shortener-migrate` | Yes | `pg-migrate-connection` only | None |
+| `id-shortener-redis` | No | `redis-password` only | None |
+
+There is no vault-wide Key Vault role assignment. These are authored and predicted grants, not yet verified live. [Azure's RBAC guidance](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide) supports individual secret/key scopes; [Key Vault network guidance](https://learn.microsoft.com/en-us/azure/key-vault/general/how-to-azure-key-vault-network-security) confirms ARM deployment of secrets/keys uses the control plane and is not blocked by vault data-plane firewall rules.
+
+`az bicep build` and `az bicep lint` for `main.bicep` and `p1-preview.bicep` passed with zero warnings. `main.prod.bicepparam` compiled with disposable placeholders; JSON parameters parsed and `git diff --check` passed. The subscription-scope what-if against the confirmed subscription predicted **one new `rg-schwab-url-shortener` and 61 creates in it, zero updates, zero deletes, and zero unsupported resources**. The preview includes five identities, `web-client-secret`, the two throughput alerts, the private PostgreSQL server, and its linked VNet/DNS. No resource was created or modified. The two missing providers remain unregistered until P1 approval. The `WEB_CLIENT_SECRET` local entry and explicit P1 approval remain before any registration or provisioning.

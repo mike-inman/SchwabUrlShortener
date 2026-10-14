@@ -4,13 +4,10 @@
   "parameters": {
     "location": { "value": "${AZURE_LOCATION}" },
     "postgresPassword": { "value": "${POSTGRES_PASSWORD}" },
-    "apiClientId": { "value": "${API_CLIENT_ID}" },
+    "redisPassword": { "value": "${REDIS_PASSWORD}" },
+    "webClientSecret": { "value": "${WEB_CLIENT_SECRET}" },
     "budgetContactEmail": { "value": "${BUDGET_CONTACT_EMAIL}" },
-    "customDomain": { "value": "${CUSTOM_DOMAIN}" },
-    "redisSku": { "value": "${REDIS_SKU}" },
-    "apiImage": { "value": "${SERVICE_API_IMAGE}" },
-    "webImage": { "value": "${SERVICE_WEB_IMAGE}" },
-    "analyticsImage": { "value": "${SERVICE_ANALYTICS_IMAGE}" },
+    "operatorPublicIp": { "value": "${OPERATOR_PUBLIC_IP}" },
     "deploymentPhase": { "value": "${DEPLOYMENT_PHASE}" }
   }
 }

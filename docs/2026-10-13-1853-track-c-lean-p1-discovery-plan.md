@@ -25,3 +25,13 @@ Prepare a reviewable P1 foundation-and-data what-if for the single `prod` enviro
 - P1 plan matches the corrected single-environment contract and contains no secret values.
 - Offline checks pass and what-if is reviewable, with no action against an existing resource group.
 - Michael can approve or reject a concrete P1 resource list and known costs before any provisioning.
+
+## Outcome — 2026-10-13 19:05 CDT
+
+The 19:05 contract corrected the connection budget. P1 was authored and locally validated for the new group; the prior staging templates were removed from the active infrastructure tree while remaining in Git history. The local staging azd folder was retained. The three values required by the user were copied privately to `prod`; a separate Redis password was generated privately. No resource provider was registered and no Azure resource was created in this preparation step.
+
+The P1 what-if and exact limitations are recorded in the dated validation section of `2026-10-13-1757-track-c-azure-infrastructure-validation.md`. One contract discrepancy needs resolution before claiming the full monitoring promise: the Event Hubs Standard tier does not expose the platform `ConsumerLag` metric; Microsoft documents those application metrics only on Premium and Dedicated. App 5xx, restart, and outbox alerts likewise depend on P2 apps or their telemetry. P1 contains only the feasible PostgreSQL alerts and an action group, with remaining alerts tracked for P2/P3.
+
+## Latest outcome for the contract marked 19:20 CDT — 2026-10-13
+
+The authoritative contract now fixes Event Hubs at one throughput unit and adds a Web client secret and separate service identities. P1 Bicep was updated accordingly. The final subscription-scope what-if predicts one new group plus 61 creates, with no updates, deletes, or unresolved resources. The migration identity has only ACR pull and its individual `pg-migrate-connection` secret grant. The full inventory, contract discrepancy about Standard-tier consumer lag, and pending `WEB_CLIENT_SECRET` entry are in the validation record. Provider registration and provisioning still await Michael's P1 approval.

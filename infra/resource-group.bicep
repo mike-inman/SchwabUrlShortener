@@ -1,11 +1,10 @@
 targetScope = 'subscription'
 
-@allowed([ 'centralus', 'eastus2' ])
 param location string = 'centralus'
 
-resource staging 'Microsoft.Resources/resourceGroups@2024-03-01' = {
-  name: 'rg-shortener-staging'
+resource shortenerGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: 'rg-schwab-url-shortener'
   location: location
 }
 
-output resourceGroupName string = staging.name
+output resourceGroupId string = shortenerGroup.id
