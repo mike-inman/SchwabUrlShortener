@@ -65,6 +65,17 @@ public sealed class HardeningHttpTests
         Assert.Equal("camera=(), microphone=(), geolocation=()", response.Headers.GetValues("Permissions-Policy").Single());
         using var dashboard = await client.GetAsync("/dashboard");
         Assert.Contains("frame-ancestors 'none'", dashboard.Headers.GetValues("Content-Security-Policy").Single());
+        Assert.DoesNotContain("fonts.googleapis.com", csp);
+        Assert.DoesNotContain("fonts.gstatic.com", csp);
+        Assert.DoesNotContain("fonts.googleapis.com", await response.Content.ReadAsStringAsync());
+        using var privacy = await client.GetAsync("/privacy");
+        Assert.Equal(HttpStatusCode.OK, privacy.StatusCode);
+        var privacyHtml = await privacy.Content.ReadAsStringAsync();
+        Assert.Contains("Privacy &amp; Cookies", privacyHtml);
+        Assert.Contains($"© {DateTime.UtcNow.Year} Ziplio", privacyHtml);
+        Assert.Contains("/contact", privacyHtml);
+        using var font = await client.GetAsync("/fonts/BricolageGrotesque.ttf");
+        Assert.Equal(HttpStatusCode.OK, font.StatusCode);
     }
 
     [Fact]

@@ -1,0 +1,109 @@
+@page "/contact"
+@using Shortener.Application
+@inject ContactApiClient Api
+@inject ILogger<Contact> Logger
+@inject IHttpContextAccessor ContextAccessor
+
+<PageTitle>Contact Us · Ziplio</PageTitle>
+<section aria-labelledby="contact-title">
+    <h1 id="contact-title">Contact Us</h1>
+    <p class="lead">Questions about Ziplio? Send us a message and we’ll get back to you.</p>
+    @if (sent)
+    {
+        <div class="result" role="status"><h2>Thanks for getting in touch.</h2><p>Your message has been received.</p></div>
+    }
+    else if (formReady)
+    {
+        <EditForm Model="form" OnSubmit="SubmitAsync" FormName="contact-message" class="link-form" novalidate>
+            <label for="contact-name">Name <span aria-hidden="true">*</span></label>
+            <InputText id="contact-name" class="form-control" maxlength="100" @bind-Value="form.Name" aria-describedby="contact-name-error" />
+            @FieldError("Name", "contact-name-error")
+            <label for="contact-email">Email <span aria-hidden="true">*</span></label>
+            <InputText id="contact-email" class="form-control" type="email" maxlength="254" @bind-Value="form.Email" aria-describedby="contact-email-error" />
+            @FieldError("Email", "contact-email-error")
+            <label for="contact-subject">Subject <span class="muted">(optional)</span></label>
+            <InputText id="contact-subject" class="form-control" maxlength="150" @bind-Value="form.Subject" aria-describedby="contact-subject-error" />
+            @FieldError("Subject", "contact-subject-error")
+            <label for="contact-message">Message <span aria-hidden="true">*</span></label>
+            <InputTextArea id="contact-message" class="form-control" rows="8" maxlength="4000" @bind-Value="form.Message" aria-describedby="contact-message-error" />
+            @FieldError("Message", "contact-message-error")
+            <div class="contact-honeypot" aria-hidden="true"><label for="contact-website">Leave this blank</label><input id="contact-website" name="form.Website" tabindex="-1" autocomplete="off" value="@form.Website" /></div>
+            <input type="hidden" name="form.FormToken" value="@form.FormToken" />
+            <button class="btn btn-primary" type="submit" disabled="@busy">@(busy ? "Sending…" : "Send message")</button>
+        </EditForm>
+    }
+    else { <p class="alert alert-danger" role="alert">Contact is temporarily unavailable. Please try again later.</p> }
+    @if (error is not null) { <p class="alert alert-danger" role="alert">@error</p> }
+</section>
+
+@code {
+    [SupplyParameterFromForm(Name = "form", FormName = "contact-message")]
+    private ContactForm? submittedForm { get; set; }
+    private ContactForm form => submittedForm ??= new();
+    private Dictionary<string, string[]> errors = new();
+    private bool formReady;
+    private bool sent;
+    private bool busy;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (string.Equals(ContextAccessor.HttpContext?.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+        {
+            formReady = !string.IsNullOrEmpty(form.FormToken);
+            return;
+        }
+        try { form.FormToken = await Api.GetFormTokenAsync(); formReady = true; }
+        catch (Exception ex)
+        {
+            Logger.LogWarning("Contact form token unavailable. ExceptionType={ExceptionType}", ex.GetType().Name);
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        busy = true;
+        error = null;
+        errors = ContactSubmissionValidator.Validate(ToSubmission());
+        if (errors.Count == 0)
+        {
+            try
+            {
+                var serverErrors = await Api.SubmitAsync(ToSubmission());
+                if (serverErrors is null) sent = true;
+                else errors = serverErrors;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning("Contact submission failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+                error = ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.TooManyRequests }
+                    ? "Too many messages. Please wait 10 minutes and try again."
+                    : "Unable to send your message right now. Please try again later.";
+            }
+        }
+        busy = false;
+    }
+
+    private ContactSubmission ToSubmission() => new(form.Name, form.Email, form.Subject, form.Message, form.Website, form.FormToken);
+
+    private Microsoft.AspNetCore.Components.RenderFragment FieldError(string key, string id) => builder =>
+    {
+        if (!errors.TryGetValue(key, out var messages)) return;
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "id", id);
+        builder.AddAttribute(2, "class", "field-error");
+        builder.AddAttribute(3, "role", "alert");
+        builder.AddContent(4, string.Join(' ', messages));
+        builder.CloseElement();
+    };
+
+    private sealed class ContactForm
+    {
+        public string? Name { get; set; }
+        public string? Email { get; set; }
+        public string? Subject { get; set; }
+        public string? Message { get; set; }
+        public string? Website { get; set; }
+        public string? FormToken { get; set; }
+    }
+}

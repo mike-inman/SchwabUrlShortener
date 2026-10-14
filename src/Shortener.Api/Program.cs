@@ -16,6 +16,7 @@ using Shortener.Domain;
 using Shortener.Infrastructure;
 using Shortener.Shared;
 using Shortener.Infrastructure.LiveUpdates;
+using Shortener.Api;
 
 if (args.Contains("--healthcheck", StringComparer.Ordinal))
 {
@@ -182,6 +183,7 @@ app.Lifetime.ApplicationStopping.Register(() => app.Logger.LogInformation("Servi
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false }).AllowAnonymous();
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") }).AllowAnonymous();
+app.MapContactEndpoints();
 
 app.MapGet("/api/me/workspaces", async (ClaimsPrincipal principal, HttpContext context,
     PostgresCustomerWorkspaces workspaces, CancellationToken cancellationToken) =>
