@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      nuget-weekly:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions-weekly:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker-weekly:
+        patterns: ["*"]
+    open-pull-requests-limit: 3

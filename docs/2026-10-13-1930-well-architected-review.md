@@ -54,9 +54,9 @@ Priority:
 
 | # | Gap | Action | Cost | Priority | Owner |
 |---|---|---|---|---|---|
-| O1 | No CI/CD pipeline | GitHub Actions in `mike-inman/SchwabUrlShortener`: on pull request, build, unit and Web tests, the Compose integration suite, `dotnet list package --vulnerable`, Bicep lint; on merge to `main`, deploy with `azd` using GitHub OIDC workload identity federation (no stored Azure secret), with a manual approval environment gate | Free (GitHub-hosted minutes) | P0 | Track F |
+| O1 | No CI/CD pipeline | GitHub Actions in `mike-inman/SchwabUrlShortener`: on pull request, build, unit and Web tests, the Compose integration suite, `dotnet list package --vulnerable`, Bicep lint; on merge to `main`, deploy with `azd` using GitHub OIDC workload identity federation (no stored Azure secret), with a manual approval environment gate. **2026-10-13 19:52 CDT: workflows locally validated in Track F; the vulnerability gate reports four High advisories, remote CI and deployment remain unverified, and deployment stays disabled pending Track C P2.** | Free (GitHub-hosted minutes) | P0 | Track F |
 | O2 | No resource tags | Tag every resource: `app=schwab-url-shortener`, `env=prod`, `owner=social@mediaraq.com`, `costCenter=assessment`, `managedBy=bicep` | Free | P0 | Track C |
-| O3 | No dependency update process | Dependabot for NuGet, GitHub Actions, and Docker base images | Free | P1 | Track F |
+| O3 | No dependency update process | Dependabot for NuGet, GitHub Actions, and Docker base images. **2026-10-13 19:52 CDT: weekly grouped configuration added in Track F; remote Dependabot operation unverified.** | Free | P1 | Track F |
 | O4 | Secret rotation undocumented | Runbook for rotating the PostgreSQL password, Redis password, Event Hubs key, and Web secret (Key Vault new version; Container Apps picks up the latest version on restart) | Free | P1 | Track C docs |
 
 ### Performance efficiency and observability
@@ -79,7 +79,7 @@ No new gaps beyond the contract. Add to `infra/README.md`: a cost table per reso
 | B — live push | Fixing throttle, then rebase and merge | None |
 | C — Azure environment | P1 discovery | S5, S6, R1, R2, R3, O2, O4, P2, and the infrastructure half of S4 |
 | D — application hardening (new) | Local implementation and verification complete; Azure and signed-in browser acceptance pending | S1, S2, S3, P1, P3 |
-| F — CI/CD (new) | Not started | O1, O3; can start now, touches only `.github/**` |
+| F — CI/CD (new) | Locally validated 2026-10-13 19:52 CDT; remote validation pending | O1, O3; deploy requires Track C P2 |
 
 ## Decisions recorded
 
