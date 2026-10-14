@@ -29,9 +29,19 @@ Read Track G's validation and rollout at `/Users/michaelinman/Repos/SchwabUrlSho
 
 - [x] Account, subscription, vault, identity, lock, and current API configuration checked.
 - [x] P2 and focused Bicep compiled; focused API script syntax checked; secret-scope role, API, temporary operator-role, and temporary firewall provider what-ifs obtained.
-- [ ] Michael approves the previews and temporary operator prerequisite.
-- [ ] Secret is written through a protected temp file; operator firewall and role are restored.
-- [ ] API secret-scoped role and API reference are deployed and live-verified; then Track G is cleared to merge.
+- [x] Michael approved the previews and temporary operator prerequisite.
+- [x] Secret written through a protected temp file; temporary operator firewall and role removed, and group lock restored after the described cleanup recovery.
+- [x] API secret-scoped role and API reference deployed and live-verified; Track G's prerequisite is met for its merge gate.
 - [ ] After Track G reaches `main`, migration-first image rollout and live Insights acceptance complete.
 
-Current status: **previewed only; awaiting Michael's approval before Azure writes.**
+## 2026-10-14 deployment and cleanup outcome
+
+Michael approved all four previewed changes, including temporary vault-scoped Secrets Officer access. Immediately before the write, the account was again `social@mediaraq.com` in the approved subscription, the `CanNotDelete` lock was present, vault `ipRules` was empty, the temporary role was absent, and API revision 5 had no visitor-hash reference. Repeated provider what-ifs still showed one secret-scoped role Create and one API Modify limited to the secret and container arrays.
+
+The guarded secret-write command used `umask 077`, rechecked the operator public IP as `<operator-ip>` immediately before adding its temporary rule, and generated a URL-safe textual secret from **48 cryptographically random bytes** into a mode-0600 temporary file. It called `az keyvault secret set --file` with UTF-8 encoding and suppressed output, then deleted the file immediately. No value was printed or logged. An ARM control-plane read confirmed the named secret exists and is enabled; its value was never read back. A filesystem check found no matching temporary file.
+
+The cleanup trap removed the operator IP rule, but its attempts to delete the temporary Secrets Officer assignment failed because the resource group's `CanNotDelete` lock also protects role-assignment deletion (`ScopeLocked`). The error was surfaced and corrected immediately: the lock removal began **15:41:19 UTC** and completed **15:41:21 UTC**; only role assignment `cb65f404-ca4c-5b42-8de4-455654616247` was deleted at **15:41:24 UTC**; an exit trap restored the same `CanNotDelete` lock at **15:41:24 UTC**. Read-only checks then showed vault `ipRules: []`, the temporary role list empty, the temporary file absent, and the lock present at `CanNotDelete`. The vault retained `defaultAction: Deny` and `bypass: AzureServices`.
+
+Focused deployment `shortener-visitor-hash-access-20261014` succeeded at **15:41:54 UTC**. Read-only role inspection found exactly the new Key Vault Secrets User assignment `6c5f533e-3193-5832-84c7-0e009e1d3d1d` at the `visitor-hash-secret` scope for `id-shortener-api` principal `fbf31300-dc22-45c0-b79d-745e648fccee`. Focused API deployment `shortener-visitor-hash-api-20261014` succeeded at **15:42:58 UTC**. Live API configuration shows `visitor-hash-secret` pointing to that vault secret with the API identity, and `VisitorHash__DailySecret` pointing to its Container Apps secret reference. The API image digest remained `sha256:08f0601ba54ff85bc058a7c4015b4499f47b21612a177f53f2fd45aedd951a1b`; latest revision `ca-shortener-api--0000006` became `Healthy` and `Running` at the **15:43:27 UTC** check. Public `https://ziplio.io/health/ready` returned 200 with valid TLS.
+
+Steps 1–2 are deployed and verified. Track G remains outside `main`, so no migration job or image-digest update has been run. The remaining acceptance work follows the migration-first order above.
