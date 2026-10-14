@@ -1,6 +1,6 @@
 # Azure scale-out contract — 2026-10-13 17:20 CDT
 
-Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts`. **Revised 18:50 CDT: replaced the staging design with one lean, scalable environment** (no staging, no Front Door, no private endpoints, Burstable PostgreSQL, Redis as a container, `rg-schwab-url-shortener`). Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. **Revised 19:00 CDT: restored low-cost design controls** — PostgreSQL VNet integration (no public endpoint), Redis persistence, monitoring alerts and diagnostics, and an automated Kafka-lag scale demonstration. **Revised 19:05 CDT**: PostgreSQL pool size set to 2 for the 35-connection B1ms limit. **Revised 19:10 CDT**: design principles added; Event Hubs auto-inflate removed in favor of a fixed 1 throughput unit plus a throughput alert. **Revised 19:15 CDT**: Entra identity settings added, with the Web client secret stored in Key Vault; secret-handling rules stated. **Revised 19:20 CDT**: one managed identity per service, with per-secret Key Vault access. Change this file only by editing it and telling every active track.
+Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts`. **Revised 18:50 CDT: replaced the staging design with one lean, scalable environment** (no staging, no Front Door, no private endpoints, Burstable PostgreSQL, Redis as a container, `rg-schwab-url-shortener`). Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. **Revised 19:00 CDT: restored low-cost design controls** — PostgreSQL VNet integration (no public endpoint), Redis persistence, monitoring alerts and diagnostics, and an automated Kafka-lag scale demonstration. **Revised 19:05 CDT**: PostgreSQL pool size set to 2 for the 35-connection B1ms limit. **Revised 19:10 CDT**: design principles added; Event Hubs auto-inflate removed in favor of a fixed 1 throughput unit plus a throughput alert. **Revised 19:15 CDT**: Entra identity settings added, with the Web client secret stored in Key Vault; secret-handling rules stated. **Revised 19:20 CDT**: one managed identity per service, with per-secret Key Vault access. **Revised 19:35 CDT**: Well-Architected review (`2026-10-13-1930-well-architected-review.md`) adopted; new Tracks D (application hardening) and F (CI/CD) added. Change this file only by editing it and telling every active track.
 
 ## Purpose
 
@@ -11,6 +11,8 @@ Three tracks run in parallel from `origin/main` at `66b8318a351788d6cec5ba6e3bfa
 | A — scale-out readiness | `2026-10-13-1720-track-a-scaleout-readiness-handoff.md` | `codex/azure-scaleout-readiness` | `/Users/michaelinman/Repos/SchwabUrlShortener-scaleout` |
 | B — dashboard live push | `2026-10-13-1720-track-b-dashboard-live-push-handoff.md` | `codex/dashboard-live-push` | `/Users/michaelinman/Repos/SchwabUrlShortener-livepush` |
 | C — Azure infrastructure | `2026-10-13-1720-track-c-azure-infrastructure-handoff.md` | `codex/azure-infra` | `/Users/michaelinman/Repos/SchwabUrlShortener-infra` |
+| D — application hardening | `2026-10-13-1935-track-d-application-hardening-handoff.md` | `codex/app-hardening` | `/Users/michaelinman/Repos/SchwabUrlShortener-hardening` |
+| F — CI/CD | `2026-10-13-1935-track-f-cicd-handoff.md` | `codex/cicd` | `/Users/michaelinman/Repos/SchwabUrlShortener-cicd` |
 
 This contract fixes the names and values the tracks share. The application is modified, not rewritten. Local Compose remains a supported way to run the whole system.
 
@@ -34,11 +36,22 @@ These govern every infrastructure choice and every future revision. A change tha
 5. **Every lean choice names its upgrade.** For each small or single-instance component, document the one change that scales it further and its approximate cost.
 6. **Demonstrable.** Scaling out and back in is shown with a repeatable, bounded script and recorded replica counts, not only described.
 
+## Well-Architected baseline
+
+`docs/2026-10-13-1930-well-architected-review.md` is the checklist every track is reviewed against. Infrastructure items adopted into this contract:
+
+- **Tags** on every resource: `app=schwab-url-shortener`, `env=prod`, `owner=social@mediaraq.com`, `costCenter=assessment`, `managedBy=bicep`.
+- **Resource lock** `CanNotDelete` on `rg-schwab-url-shortener`. Removing it is a deliberate, documented operator step.
+- **Transport and exposure:** minimum TLS 1.2 on Storage, Event Hubs, PostgreSQL, and Key Vault clients; secure transfer required; public blob access disabled; registry anonymous pull and admin user disabled.
+- **Posture:** Microsoft Defender for Cloud foundational CSPM (free) on the subscription; record the secure score and remediate free recommendations scoped to this resource group.
+- **Web without a client secret in Azure (if supported):** a federated identity credential on the SchwabUrlShortener Web registration trusting `id-shortener-web`, with Microsoft.Identity.Web `ClientCredentials` using `SignedAssertionFromManagedIdentity`. If Microsoft documentation shows this is unsupported for a multitenant web app, keep `web-client-secret` in Key Vault and record why.
+- **Operations documentation:** recovery runbook, rollback by previous image digest, secret rotation runbook, and an Azure Monitor workbook for evaluators.
+
 ## Environment
 
 - Azure account: `social@mediaraq.com`. All Azure work for this project uses this login.
 - Subscription: `Azure subscription 1`, ID `baaf4acd-ff40-43d1-a7ba-6089a2c4f41e`, tenant `mediaraq com` (`eea269ab-1571-48a5-a18c-824ba5859cd5`). Confirmed by Michael on 2026-10-13. Before any deployment, `az account show` must report this subscription ID; if not, run `az account set --subscription baaf4acd-ff40-43d1-a7ba-6089a2c4f41e` and recheck. The same login can see two subscriptions in tenant `3d9ba6ab-7f64-43fa-bf44-346b3c2a3fb6`; never deploy there.
-- This subscription is an Azure **free trial** (`FreeTrial_2014-09-01`, spending limit on). Michael must upgrade it to Pay-As-You-Go before the trial ends or credit runs out, or Azure disables the resources. Track C records the trial end date in its validation note.
+- This subscription is an Azure **free trial** (`FreeTrial_2014-09-01`, spending limit on). Michael must upgrade it to Pay-As-You-Go before the trial ends or credit runs out, or Azure disables the resources. As of 2026-10-13 19:20 CDT the portal shows USD 191.56 of free credit expiring in 17 days (about 2026-10-30); upgrade before then if evaluation may run later.
 - Do not modify or reuse resources in `rg-schwab-url-shortener-identity` or any other existing resource group (`rg-agentengineering-*`, `AzureLeadInterviewLab-rg`, `rg-mynetapp-dev`, `NetworkWatcherRG`). `rg-shortener-staging` is being deleted; never recreate it.
 - Region: `centralus`.
 - Resource group: `rg-schwab-url-shortener`.
@@ -230,6 +243,8 @@ The Analytics worker serves `GET /health/live` and `GET /health/ready` on port `
 
 | Area | Owner |
 |---|---|
+| `Dockerfile` runtime user, rate limiting, security headers, OpenTelemetry export | D (after B merges) |
+| `.github/**` | F |
 | `src/Shortener.Web/Program.cs`, `src/Shortener.Api/Program.cs` startup configuration, `appsettings.json` defaults | A (B adds `AddLiveUpdates(...)` registration, rebased after A) |
 | `src/Shortener.Analytics/AnalyticsOptions.cs`, `Program.cs`, health endpoints, `Dockerfile` analytics stage | A |
 | `compose.scaleout.yaml`, `deploy/Caddyfile.scaleout` | A |
@@ -243,7 +258,8 @@ The Analytics worker serves `GET /health/live` and `GET /health/ready` on port `
 2. B rebases on `main`, then merges.
 3. C can merge at any time; it never touches `src/`.
 4. First deploy: data services and apps with current `main` images; guest flow smoke test.
-5. After A and B merge: redeploy with all scale-out and live-update settings enabled, then the scale demonstration.
+4a. Track D starts after B merges and merges before the final redeploy. Track F can start now; its deploy job is enabled after Track C's environment exists.
+5. After A, B, and D merge: redeploy with all scale-out, live-update, and hardening settings enabled, then the scale demonstration.
 
 ## Human prerequisites (Michael)
 

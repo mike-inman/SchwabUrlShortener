@@ -1,11 +1,11 @@
 ## Track C — Azure Lean Scalable Environment Handoff
-Status: drafted on 2026-10-13; **rewritten 18:50 CDT** for one lean environment, replacing the staging design. **Revised 19:00 CDT**: PostgreSQL VNet integration, Redis persistence, monitoring, and automated Kafka-lag scale demo restored. **Revised 19:10 CDT**: design principles; Event Hubs fixed at 1 throughput unit with an alert, auto-inflate disabled. **Revised 19:15 CDT**: Entra identity settings and Web client secret in Key Vault. **Revised 19:20 CDT**: one identity per service with per-secret access.
+Status: drafted on 2026-10-13; **rewritten 18:50 CDT** for one lean environment, replacing the staging design. **Revised 19:00 CDT**: PostgreSQL VNet integration, Redis persistence, monitoring, and automated Kafka-lag scale demo restored. **Revised 19:10 CDT**: design principles; Event Hubs fixed at 1 throughput unit with an alert, auto-inflate disabled. **Revised 19:15 CDT**: Entra identity settings and Web client secret in Key Vault. **Revised 19:20 CDT**: one identity per service with per-secret access. **Revised 19:35 CDT**: Well-Architected baseline items.
 You are working in /Users/michaelinman/Repos/SchwabUrlShortener-infra.
 
 Follow these repo standards exactly:
 - Read `AGENTS.md`; confirm `pwd -P`, branch, current commit, and `git status --short --branch` before edits.
 - Recopy this handoff and `docs/2026-10-13-1720-azure-scaleout-contract.md` from `/Users/michaelinman/Repos/SchwabUrlShortener/docs/` into your worktree and commit them first as `docs: adopt lean single-environment contract`.
-- Preserve all other worktrees. Edit only `infra/**`, `azure.yaml`, and your dated docs. Never edit `src/`, `tests/`, `Dockerfile`, or any `compose*.yaml`.
+- Preserve all other worktrees. Edit only `infra/**`, `azure.yaml`, `docs/runbooks/**`, and your dated docs. Never edit `src/`, `tests/`, `Dockerfile`, or any `compose*.yaml`.
 - Do not modify `.env*`, credentials, local agent configuration, the assignment PDF, or any local Docker container or volume.
 - The contract is authoritative for names, sizes, network, settings, and routing. Stop and report if it is wrong.
 
@@ -50,6 +50,7 @@ P1 — Foundation and data (one approval)
 12. Budget USD 100/month with alerts at 50/80/100% to `BUDGET_CONTACT_EMAIL`.
 12a. The separate Redis persistence storage account and Azure Files share `redis-data`, per the contract.
 12b. Diagnostic settings, one action group, and the alert rules listed under Monitoring in the contract. Record each rule's name and threshold.
+12c. The contract's Well-Architected baseline: tags on every resource, the `CanNotDelete` lock on the resource group (applied last in P1, so P1 can still be corrected), TLS and exposure settings, and Defender for Cloud foundational CSPM with the secure score recorded.
 
 P2 — Apps with today's images (one approval)
 13. Container Apps environment (consumption workload profile) in the subnet, logging to Log Analytics.
@@ -58,6 +59,7 @@ P2 — Apps with today's images (one approval)
 16. `ca-shortener-api`, `ca-shortener-web`, `ca-shortener-analytics` with the contract's CPU, memory, replica, scale-rule, probe, `AllowedHosts`, `PublicLinks__BaseUrl`, and Key Vault reference settings. Web: single revision mode, session affinity `sticky`. Analytics: KEDA `kafka` rule using the Event Hubs SASL secret.
 17. `caj-shortener-migrate`, using `id-shortener-migrate`: manual job, API image, `--migrate`, `pg-migrate-connection`, 10-minute timeout.
 18. Build and push images with `infra/scripts/build-images.sh`, run the migration job once, and confirm all apps healthy.
+18a. Web federated credential: check Microsoft documentation for `SignedAssertionFromManagedIdentity` with a multitenant web app registration and record the URL. If supported, give Michael the exact `az ad app federated-credential create` command for the SchwabUrlShortener Web registration and `id-shortener-web`, and configure Web's `AzureAd__ClientCredentials__*` settings for it, gated by `enableScaleOutSettings`. If unsupported, keep `web-client-secret` and record why.
 19. `enableScaleOutSettings` (default `false`) gates the settings only Track A's and Track B's code understands: `DataProtection__*`, `TokenCache__*`, `ForwardedHeaders__*`, `Kafka__SecurityProtocol`, `Kafka__Sasl*`, `Kafka__EnableIdempotence`, `LiveUpdates__*`. With it `false`, Analytics cannot reach Event Hubs; set Analytics min and max to 0 until P3, and record that.
 
 P3 — Scale-out settings and scale demonstration (one approval, after Tracks A and B have merged to `main`)
@@ -108,6 +110,8 @@ Testing:
 
 Documentation:
 - Update `docs/2026-10-13-1757-track-c-azure-infrastructure-validation.md` with a dated section for this revision: provider registrations, resource inventory, what-if summaries, connection-budget arithmetic, routing choice and evidence, smoke results, scale demonstration table, estimated monthly cost (calculator-based), trial end date, and remaining operator actions.
+- Add `docs/runbooks/` with recovery (PostgreSQL point-in-time restore, redeploy, migrations, Redis), rollback (redeploy the previous image digests, recorded per deployment), and secret rotation (new Key Vault version, then restart the affected apps).
+- Add an Azure Monitor workbook in Bicep: request rate, latency, errors and replicas per app, consumer lag, outbox age, PostgreSQL CPU and connections.
 - Rewrite `infra/README.md` for the single environment: `azd` values, phases, `enableScaleOutSettings`, migration job, scale demo usage, and production upgrade steps.
 - Update the root README surgically with a link to `infra/README.md` and the public host.
 
@@ -119,6 +123,7 @@ Completion criteria:
 - [ ] The scale demonstration ran once and recorded replica counts scaling out and back in.
 - [ ] Estimated monthly cost recorded; budget at USD 100 with alerts.
 - [ ] Production upgrade path documented for every lean choice.
-- [ ] Only `infra/**`, `azure.yaml`, and dated docs changed.
+- [ ] Only `infra/**`, `azure.yaml`, `docs/runbooks/**`, and dated docs changed.
+- [ ] Every Well-Architected review item assigned to Track C is done or recorded with a reason.
 
 Report back: final branch commit, the public host, smoke and scale-demo results, estimated monthly cost, trial end date, and Michael's remaining actions (redirect URIs, trial upgrade).
