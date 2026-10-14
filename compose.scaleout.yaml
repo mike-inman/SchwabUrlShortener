@@ -1,0 +1,20 @@
+services:
+  api2:
+    extends:
+      file: compose.yaml
+      service: api
+    networks:
+      default:
+        aliases: [api]
+
+  web2:
+    extends:
+      file: compose.yaml
+      service: web
+    networks:
+      default:
+        aliases: [web]
+
+  proxy:
+    volumes:
+      - ./deploy/Caddyfile.scaleout:/etc/caddy/Caddyfile:ro

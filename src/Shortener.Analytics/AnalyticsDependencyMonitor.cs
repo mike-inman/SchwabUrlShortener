@@ -12,7 +12,7 @@ public sealed class AnalyticsDependencyMonitor(
     {
         File.Delete(ReadyFile);
         var wasReady = false;
-        using var broker = new AdminClientBuilder(new AdminClientConfig { BootstrapServers = options.BootstrapServers }).Build();
+        using var broker = new AdminClientBuilder(options.AdminConfig()).Build();
         while (!stoppingToken.IsCancellationRequested)
         {
             var postgresReady = false;

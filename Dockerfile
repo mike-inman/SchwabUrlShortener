@@ -17,10 +17,11 @@ COPY --from=build /app/publish .
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "Shortener.Api.dll"]
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS analytics
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS analytics
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends libgssapi-krb5-2 && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/publish .
+EXPOSE 8080
 ENTRYPOINT ["dotnet", "Shortener.Analytics.dll"]
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS tests

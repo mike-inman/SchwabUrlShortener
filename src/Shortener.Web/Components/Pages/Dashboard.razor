@@ -7,6 +7,9 @@
 @inject IdentityAvailability Identity
 @inject NavigationManager Navigation
 @inject WorkspaceNavigationState WorkspaceNavigation
+@inject Shortener.Web.Services.LiveUpdates.ILinkChangeSubscriber LiveUpdates
+@inject IConfiguration Configuration
+@using Shortener.Application
 
 <PageTitle>My links · @BrandText.TitleSuffix</PageTitle>
 @if (notice is not null)
@@ -115,14 +118,17 @@ else
     private bool renewalReturnCleared;
     private string? error;
     private readonly CancellationTokenSource liveCancellation = new();
-    private Task? liveTask;
+    private IDisposable? liveSubscription;
+    private CancellationTokenSource? pendingRefreshCancellation;
+    private Task? pendingRefreshTask;
+    private bool refreshPending;
 
     protected override async Task OnInitializedAsync()
     {
         if (Identity.Configured) await LoadAsync();
     }
 
-    protected override Task OnAfterRenderAsync(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (Reauth == "1" && !reauthRequired && !renewalReturnCleared)
         {
@@ -135,19 +141,75 @@ else
             Navigation.NavigateTo("/account/renew", forceLoad: true);
         }
         else if (firstRender && Identity.Configured && !reauthRequired)
-            liveTask = WatchLinksAsync();
-        return Task.CompletedTask;
+            await SubscribeAsync();
     }
 
-    private async Task WatchLinksAsync()
+    private async Task SubscribeAsync()
+    {
+        LinkChangeScope scope;
+        Guid id;
+        if (Identity.Customer)
+        {
+            if (workspaceId is not { } selectedId || workspaces?.Any(x => x.Id == selectedId) != true) return;
+            scope = LinkChangeScope.Workspace;
+            id = selectedId;
+        }
+        else
+        {
+            var user = (await AuthenticationState).User;
+            if (user.Identity?.IsAuthenticated != true) return;
+            var tenant = user.FindFirst("tid")?.Value ??
+                user.FindFirst("http://schemas.microsoft.com/identity/claims/tenantid")?.Value;
+            if (!Guid.TryParse(tenant, out id) || id == Guid.Empty) return;
+            scope = LinkChangeScope.Tenant;
+        }
+        CancelPendingRefresh();
+        liveSubscription?.Dispose();
+        liveSubscription = LiveUpdates.Subscribe(scope, id, () => InvokeAsync(QueueRefresh));
+        LiveUpdates.ConnectionChanged -= OnConnectionChanged;
+        LiveUpdates.ConnectionChanged += OnConnectionChanged;
+        liveUpdateError = !LiveUpdates.IsConnected;
+        StateHasChanged();
+    }
+
+    private void OnConnectionChanged(bool connected) => _ = InvokeAsync(() =>
+    {
+        liveUpdateError = !connected;
+        StateHasChanged();
+    });
+
+    private void QueueRefresh()
+    {
+        if (liveCancellation.IsCancellationRequested || reauthRequired || refreshPending) return;
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(liveCancellation.Token);
+        pendingRefreshCancellation = cancellation;
+        refreshPending = true;
+        pendingRefreshTask = ThrottleAsync(cancellation);
+    }
+
+    private void CancelPendingRefresh()
+    {
+        pendingRefreshCancellation?.Cancel();
+        pendingRefreshCancellation = null;
+        refreshPending = false;
+    }
+
+    private async Task ThrottleAsync(CancellationTokenSource cancellation)
     {
         try
         {
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
-            while (await timer.WaitForNextTickAsync(liveCancellation.Token))
-                await InvokeAsync(RefreshLiveAsync);
+            var milliseconds = int.Parse(Configuration["LiveUpdates:DebounceMilliseconds"]!);
+            await Task.Delay(milliseconds, cancellation.Token);
+            await InvokeAsync(async () =>
+            {
+                if (cancellation.IsCancellationRequested || !ReferenceEquals(pendingRefreshCancellation, cancellation)) return;
+                pendingRefreshCancellation = null;
+                refreshPending = false;
+                await RefreshLiveAsync();
+            });
         }
-        catch (OperationCanceledException) when (liveCancellation.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        finally { cancellation.Dispose(); }
     }
 
     private async Task RefreshLiveAsync()
@@ -160,9 +222,10 @@ else
             links = latest;
             if (selected is not null)
                 selected = latest.FirstOrDefault(link => link.ShortCode == selected.ShortCode);
-            if (changed || liveUpdateError)
+            var warningChanged = liveUpdateError != !LiveUpdates.IsConnected;
+            if (changed || warningChanged)
             {
-                liveUpdateError = false;
+                liveUpdateError = !LiveUpdates.IsConnected;
                 StateHasChanged();
             }
         }
@@ -184,10 +247,13 @@ else
     public async ValueTask DisposeAsync()
     {
         WorkspaceNavigation.Clear(SelectWorkspaceAsync);
+        LiveUpdates.ConnectionChanged -= OnConnectionChanged;
+        liveSubscription?.Dispose();
+        CancelPendingRefresh();
         await liveCancellation.CancelAsync();
-        if (liveTask is not null)
+        if (pendingRefreshTask is not null)
         {
-            try { await liveTask; }
+            try { await pendingRefreshTask; }
             catch (OperationCanceledException) { }
         }
         liveCancellation.Dispose();
@@ -270,6 +336,7 @@ else
     {
         if (workspaces?.Any(x => x.Id == selectedId) != true || workspaceId == selectedId) return;
         workspaceId = selectedId;
+        await SubscribeAsync();
         selected = null;
         WorkspaceNavigation.SetSelected(selectedId);
         await LoadLinksAsync();

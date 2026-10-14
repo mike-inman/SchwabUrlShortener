@@ -72,13 +72,21 @@ public sealed class CustomerBearerTests
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            builder.UseSetting("DataProtection:Mode", "Filesystem");
+            builder.UseSetting("DataProtection:ApplicationName", "Shortener.Api");
             builder.UseSetting("Identity:Mode", "Customer");
             builder.UseSetting("AzureAd:Instance", "https://schwaburlshortener.ciamlogin.com/");
             builder.UseSetting("AzureAd:TenantId", Tenant);
             builder.UseSetting("AzureAd:ClientId", Audience);
+            builder.UseSetting("LiveUpdates:Mode", "Redis");
+            builder.UseSetting("LiveUpdates:Channel", "shortener:links:v1");
+            builder.UseSetting("ConnectionStrings:Redis", Environment.GetEnvironmentVariable("ConnectionStrings__Redis")
+                ?? "localhost:63652,abortConnect=false");
             builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Identity:Mode"] = "Customer",
+                ["DataProtection:Mode"] = "Filesystem",
+                ["DataProtection:ApplicationName"] = "Shortener.Api",
                 ["AzureAd:Instance"] = "https://schwaburlshortener.ciamlogin.com/",
                 ["AzureAd:TenantId"] = Tenant,
                 ["AzureAd:ClientId"] = Audience,

@@ -3,17 +3,22 @@ using Bunit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Shortener.Web.Components.Layout;
 using Shortener.Web.Components.Pages;
 using Shortener.Web.Services;
+using Shortener.Web.Services.LiveUpdates;
+using Shortener.Application;
 using Xunit;
 
 namespace Shortener.WebTests;
 
 public sealed class ComponentTests : BunitContext
 {
+    private static readonly Guid Tenant = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    private readonly FakeLiveUpdates liveUpdates = new();
     private static readonly CreatedLink Created = new("abc", "https://example.com", "/r/abc",
         new DateTimeOffset(2026, 10, 12, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero));
     private static readonly ManagedLink Managed = new("abc", "https://example.com", Created.CreatedAtUtc, null, 4);
@@ -165,6 +170,7 @@ public sealed class ComponentTests : BunitContext
     {
         var auth = AddAuthorization();
         auth.SetAuthorized("operator");
+        auth.SetClaims(new Claim("tid", Tenant.ToString()));
         var api = Setup();
         var snapshot = Managed;
         api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([snapshot]);
@@ -174,7 +180,81 @@ public sealed class ComponentTests : BunitContext
         Assert.DoesNotContain(">Refresh</button>", view.Markup);
         view.Find("button.btn-sm").Click();
         snapshot = Managed with { HitCount = 5 };
+        liveUpdates.Signal(LinkChangeScope.Tenant, Tenant);
         view.WaitForAssertion(() => { Assert.Contains("<td>5</td>", view.Markup); Assert.Contains("Redirects: 5", view.Markup); }, TimeSpan.FromSeconds(8));
+    }
+
+    [Fact]
+    public async Task Dashboard_is_idle_and_coalesces_a_signal_burst()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        auth.SetClaims(new Claim("tid", Tenant.ToString()));
+        var api = Setup();
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        var view = Render<Dashboard>();
+        view.WaitForAssertion(() => Assert.Equal(1, api.AuthenticatedCalls));
+        await Task.Delay(100);
+        Assert.Equal(1, api.AuthenticatedCalls);
+        for (var i = 0; i < 50; i++) liveUpdates.Signal(LinkChangeScope.Tenant, Tenant);
+        await Task.Delay(250);
+        Assert.Equal(2, api.AuthenticatedCalls);
+        await view.Instance.DisposeAsync();
+        view.Dispose();
+        liveUpdates.Signal(LinkChangeScope.Tenant, Tenant);
+        await Task.Delay(50);
+        Assert.Equal(2, api.AuthenticatedCalls);
+    }
+
+    [Fact]
+    public async Task Dashboard_refreshes_during_sustained_signals()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        auth.SetClaims(new Claim("tid", Tenant.ToString()));
+        var api = Setup();
+        Services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["LiveUpdates:DebounceMilliseconds"] = "1000" }).Build());
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        var view = Render<Dashboard>();
+        view.WaitForAssertion(() => Assert.Equal(1, api.AuthenticatedCalls));
+
+        for (var i = 0; i < 25; i++)
+        {
+            liveUpdates.Signal(LinkChangeScope.Tenant, Tenant);
+            await Task.Delay(200);
+        }
+        await Task.Delay(300);
+        Assert.InRange(api.AuthenticatedCalls - 1, 4, 6);
+        await view.Instance.DisposeAsync();
+        view.Dispose();
+    }
+
+    [Fact]
+    public async Task Workspace_switch_and_disposal_cancel_pending_refreshes()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup(customer: true);
+        var personal = new WorkspaceSummary(Guid.NewGuid(), "Personal", 0);
+        var team = new WorkspaceSummary(Guid.NewGuid(), "Team", 1);
+        api.Workspaces = _ => Task.FromResult<IReadOnlyList<WorkspaceSummary>>([personal, team]);
+        api.WorkspaceList = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        var view = Render<Dashboard>();
+        view.WaitForAssertion(() => Assert.Equal(1, liveUpdates.SubscriptionCount));
+        Assert.Single(api.WorkspaceReads);
+
+        liveUpdates.Signal(LinkChangeScope.Workspace, personal.Id);
+        await Services.GetRequiredService<WorkspaceNavigationState>().SelectAsync(team.Id);
+        Assert.Equal(2, api.WorkspaceReads.Count);
+        await Task.Delay(200);
+        Assert.Equal(2, api.WorkspaceReads.Count);
+
+        liveUpdates.Signal(LinkChangeScope.Workspace, team.Id);
+        await view.Instance.DisposeAsync();
+        view.Dispose();
+        await Task.Delay(200);
+        Assert.Equal(2, api.WorkspaceReads.Count);
     }
 
     [Fact]
@@ -284,7 +364,37 @@ public sealed class ComponentTests : BunitContext
         Services.AddSingleton(new WorkspaceNavigationState());
         Services.AddSingleton(NullLogger<Home>.Instance);
         Services.AddSingleton(NullLogger<Dashboard>.Instance);
+        Services.AddSingleton<ILinkChangeSubscriber>(liveUpdates);
+        Services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["LiveUpdates:DebounceMilliseconds"] = "100" }).Build());
         return api;
+    }
+
+    private sealed class FakeLiveUpdates : ILinkChangeSubscriber
+    {
+        private readonly List<(LinkChangeScope Scope, Guid Id, Func<Task> Callback)> callbacks = [];
+        public int SubscriptionCount => callbacks.Count;
+        public bool IsConnected => true;
+        public event Action<bool>? ConnectionChanged
+        {
+            add { }
+            remove { }
+        }
+        public IDisposable Subscribe(LinkChangeScope scope, Guid scopeId, Func<Task> onChange)
+        {
+            var entry = (scope, scopeId, onChange);
+            callbacks.Add(entry);
+            return new FakeSubscription(() => callbacks.Remove(entry));
+        }
+        public void Signal(LinkChangeScope scope, Guid id)
+        {
+            foreach (var entry in callbacks.Where(x => x.Scope == scope && x.Id == id).ToArray())
+                _ = entry.Callback();
+        }
+        private sealed class FakeSubscription(Action dispose) : IDisposable
+        {
+            public void Dispose() => dispose();
+        }
     }
 
     private sealed class FakeApi : IShortenerApiClient
