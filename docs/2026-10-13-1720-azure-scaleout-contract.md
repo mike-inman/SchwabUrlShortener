@@ -136,7 +136,7 @@ External ID tenant: `schwaburlshortener.onmicrosoft.com`, tenant ID `6adc36e9-df
 | Setting | App | Azure value |
 |---|---|---|
 | `Identity__Mode` | API, Web, migrate | `Customer` |
-| `AzureAd__Instance` | API, migrate | `https://schwaburlshortener.ciamlogin.com/` |
+| `AzureAd__Instance` | API, Web, migrate | `https://schwaburlshortener.ciamlogin.com/` |
 | `AzureAd__TenantId` | API, Web, migrate | `6adc36e9-dfe5-469f-8aed-6ef83abcdd19` |
 | `AzureAd__ClientId` | API, migrate | `8911f6b3-365c-4ce5-a0f7-d12b2e4f230a` (customer API registration) |
 | `AzureAd__Authority` | Web | `https://schwaburlshortener.ciamlogin.com/6adc36e9-dfe5-469f-8aed-6ef83abcdd19/v2.0` |
@@ -146,6 +146,8 @@ External ID tenant: `schwaburlshortener.onmicrosoft.com`, tenant ID `6adc36e9-df
 | `ShortenerApi__Scope` | Web | `api://8911f6b3-365c-4ce5-a0f7-d12b2e4f230a/access_as_user` |
 
 Redirect URIs for the public host belong on the **customer** Web registration (`93f2f816…`) in the External ID tenant. The workforce registrations (`d4cd63a0…`, `34d681eb…`) in tenant `mediaraq com` are not used by Azure: remove the Azure redirect URIs added to `d4cd63a0…` at 23:02 and its "SchwabUrlShortener Azure prod" secret once customer sign-in works in Azure.
+
+Retain the customer Web registration's `azurecontainerapps.io` callback URIs until Michael confirms **both sign-in and sign-out** work on `https://ziplio.io`; a correct sign-in redirect alone does not meet this removal gate. Preview any later reconciliation before applying it.
 
 Entra operations against the External ID tenant use a separate Azure CLI profile (`AZURE_CONFIG_DIR=$HOME/.azure-ziplio`, `az login --tenant 6adc36e9-dfe5-469f-8aed-6ef83abcdd19 --allow-no-subscriptions`), so the default CLI login used for Azure resources in subscription `baaf4acd…` is never switched.
 

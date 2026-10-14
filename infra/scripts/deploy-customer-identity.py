@@ -60,7 +60,7 @@ def main():
             'Identity__Mode': 'Customer', 'AzureAd__Instance': INSTANCE,
             'AzureAd__TenantId': TENANT, 'AzureAd__ClientId': API_ID},
         'ca-shortener-web': {
-            'Identity__Mode': 'Customer',
+            'Identity__Mode': 'Customer', 'AzureAd__Instance': INSTANCE,
             'AzureAd__Authority': f'{INSTANCE}{TENANT}/v2.0',
             'AzureAd__TenantId': TENANT, 'AzureAd__ClientId': WEB_ID,
             'AzureAd__CallbackPath': '/signin-oidc',
