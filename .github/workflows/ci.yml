@@ -1,0 +1,230 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 8 * * 1'
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore and build with warnings as errors
+        run: |
+          set -euo pipefail
+          # The dedicated vulnerabilities job owns NuGet advisories; keep
+          # compiler and build warnings as errors in this independent job.
+          dotnet restore SchwabUrlShortener.slnx --nologo -p:NuGetAudit=false
+          dotnet build SchwabUrlShortener.slnx -c Release --no-restore --nologo -warnaserror -p:NuGetAudit=false
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          dotnet test tests/Shortener.UnitTests/Shortener.UnitTests.csproj -c Release --no-build --no-restore --logger trx --results-directory TestResults/unit
+      - name: Web tests without real Redis
+        run: |
+          set -euo pipefail
+          dotnet test tests/Shortener.WebTests/Shortener.WebTests.csproj -c Release --no-build --no-restore --filter 'FullyQualifiedName!~LiveUpdateRedisTests' --logger trx --results-directory TestResults/web
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: unit-web-trx
+          path: TestResults/**/*.trx
+          if-no-files-found: warn
+
+  integration-and-startup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 35
+    env:
+      LOCAL_PORT: '18087'
+      PUBLIC_BASE_URL: http://localhost:18087/
+      COMPOSE_PROJECT_NAME: schwab-trackf-${{ github.run_id }}-${{ github.run_attempt }}
+      TRACKF_OVERRIDE: /tmp/trackf-${{ github.run_id }}-${{ github.run_attempt }}-network.override.yaml
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Create temporary Track F network override
+        run: |
+          set -euo pipefail
+          cat > "$TRACKF_OVERRIDE" <<'EOF'
+          networks:
+            default:
+              ipam:
+                config:
+                  - subnet: 10.251.47.0/24
+          EOF
+      - name: Start fresh disposable Compose test profile
+        run: |
+          set -euo pipefail
+          docker compose -p "$COMPOSE_PROJECT_NAME" --env-file deploy/local.env.example -f compose.yaml -f compose.local.yaml -f compose.test.yaml -f "$TRACKF_OVERRIDE" --profile test up --build -d --quiet-pull db redis kafka kafka-init test-migrate proxy api web analytics
+      - name: Run real PostgreSQL, Redis, and Kafka tests
+        run: |
+          set -euo pipefail
+          docker compose -p "$COMPOSE_PROJECT_NAME" --env-file deploy/local.env.example -f compose.yaml -f compose.local.yaml -f compose.test.yaml -f "$TRACKF_OVERRIDE" --profile test run --rm --no-deps tests SchwabUrlShortener.slnx --nologo -m:1 /nodeReuse:false
+      - name: Start each host with committed settings and service endpoints
+        run: |
+          set -euo pipefail
+          docker compose -p "$COMPOSE_PROJECT_NAME" --env-file deploy/local.env.example -f compose.yaml -f compose.local.yaml -f compose.test.yaml -f "$TRACKF_OVERRIDE" --profile test run --rm --no-deps --entrypoint /bin/sh tests -s < .github/scripts/check-host-startup.sh
+      - name: Remove only this disposable Compose project
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -f "$TRACKF_OVERRIDE" ]]; then
+            docker compose -p "$COMPOSE_PROJECT_NAME" --env-file deploy/local.env.example -f compose.yaml -f compose.local.yaml -f compose.test.yaml -f "$TRACKF_OVERRIDE" --profile test down --volumes --remove-orphans
+          fi
+
+  vulnerabilities:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+      - name: Audit direct and transitive NuGet packages
+        run: |
+          set -euo pipefail
+          dotnet restore SchwabUrlShortener.slnx --nologo
+          dotnet list SchwabUrlShortener.slnx package --vulnerable --include-transitive --format json > "$RUNNER_TEMP/nuget-audit.json"
+          python3 .github/scripts/check-vulnerabilities.py "$RUNNER_TEMP/nuget-audit.json"
+
+  bicep:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Build and lint Bicep
+        run: |
+          set -euo pipefail
+          if [ ! -f infra/main.bicep ]; then
+            echo 'Track C Bicep is not on this commit yet.'
+            exit 0
+          fi
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+          az bicep lint --file infra/main.bicep
+
+  codeql:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@9f759ee644a3e7c15c1390abf49868036c00067b # v3.38.3
+        with:
+          languages: csharp
+          queries: security-and-quality
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+      - name: Build for CodeQL
+        run: |
+          set -euo pipefail
+          dotnet build SchwabUrlShortener.slnx -c Release --nologo -p:NuGetAudit=false
+      - uses: github/codeql-action/analyze@9f759ee644a3e7c15c1390abf49868036c00067b # v3.38.3
+
+  dependency-review:
+    if: github.event_name == 'pull_request' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+      - name: Scan checked-out Git history
+        run: |
+          set -euo pipefail
+          gitleaks git . --log-opts=HEAD --redact=100 --no-banner --exit-code=1
+
+  image-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: api
+            project: src/Shortener.Api/Shortener.Api.csproj
+          - target: web
+            project: src/Shortener.Web/Shortener.Web.csproj
+          - target: analytics
+            project: src/Shortener.Analytics/Shortener.Analytics.csproj
+    name: image-scan-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Build release image
+        env:
+          TARGET: ${{ matrix.target }}
+          PROJECT: ${{ matrix.project }}
+        run: |
+          set -euo pipefail
+          docker build --pull --target "$TARGET" --build-arg "PROJECT=$PROJECT" --tag "shortener-$TARGET:ci" .
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: shortener-${{ matrix.target }}:ci
+          format: sarif
+          output: trivy-${{ matrix.target }}.sarif
+          severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
+          ignore-unfixed: true
+          exit-code: '1'
+          scanners: vuln
+      - uses: github/codeql-action/upload-sarif@9f759ee644a3e7c15c1390abf49868036c00067b # v3.38.3
+        if: always() && !github.event.repository.private && hashFiles('trivy-*.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        with:
+          sarif_file: trivy-${{ matrix.target }}.sarif
+          category: trivy-${{ matrix.target }}

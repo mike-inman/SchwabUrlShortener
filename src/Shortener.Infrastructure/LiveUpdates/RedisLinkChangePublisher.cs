@@ -13,6 +13,7 @@ public sealed class RedisLinkChangePublisher(
 {
     public async Task PublishAsync(LinkChange change, CancellationToken cancellationToken = default)
     {
+        using var activity = RedisTelemetry.Source.StartActivity("redis.live.publish", System.Diagnostics.ActivityKind.Client);
         try
         {
             await services.GetRequiredService<IConnectionMultiplexer>().GetSubscriber().PublishAsync(

@@ -1,0 +1,139 @@
+name: Deploy production
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      smoke_expect_fail:
+        description: Deliberately fail smoke after updating images to prove rollback
+        type: boolean
+        required: false
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      vars.DEPLOY_ENABLED == 'true' &&
+      ((github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository) ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 90
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      SMOKE_EXPECT_FAIL: ${{ inputs.smoke_expect_fail && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Verify deployment inputs and current main commit
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for value in "$AZURE_CLIENT_ID" "$AZURE_TENANT_ID" "$AZURE_SUBSCRIPTION_ID" "$AZURE_RESOURCE_GROUP" "$ACR_NAME" "$PUBLIC_ORIGIN"; do
+            if [[ -z "$value" ]]; then
+              echo '- Failed: a required deployment variable is missing.' >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          done
+          if [[ "$(git rev-parse HEAD)" != "$DEPLOY_SHA" ]]; then
+            echo '- Failed: checked-out commit differs from the successful CI commit.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          current_main=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [[ "$current_main" != "$DEPLOY_SHA" ]]; then
+            echo '- Failed: CI commit is no longer the tip of main; skip stale deployment.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [[ "$AZURE_SUBSCRIPTION_ID" != baaf4acd-ff40-43d1-a7ba-6089a2c4f41e || "$AZURE_RESOURCE_GROUP" != rg-schwab-url-shortener ]]; then
+            echo '- Failed: subscription or resource group differs from the reviewed production target.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        id: login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Record previous application and migration images
+        id: capture
+        run: |
+          set -euo pipefail
+          bash .github/scripts/capture-deploy-state.sh
+      - name: Build release images and resolve digests
+        id: build
+        run: |
+          set -euo pipefail
+          bash .github/scripts/build-release-images.sh
+      - name: Run backward-compatible migration
+        id: migration
+        run: |
+          set -euo pipefail
+          bash .github/scripts/run-migration-job.sh
+      - name: Update API, Analytics, then Web
+        id: update
+        run: |
+          set -euo pipefail
+          bash .github/scripts/update-apps.sh
+      - name: Smoke public guest flow
+        id: smoke
+        env:
+          SMOKE_EXPECT_FAIL: ${{ inputs.smoke_expect_fail && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/smoke-deploy.py "$PUBLIC_ORIGIN"
+      - name: Record successful rollout
+        if: success()
+        run: |
+          set -euo pipefail
+          printf '%s\n' '- Deployment: succeeded.' '- Rollback: not needed.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Restore previous image digests after update or smoke failure
+        id: rollback
+        if: failure() && (steps.update.outcome == 'success' || steps.update.outcome == 'failure')
+        run: |
+          set -euo pipefail
+          bash .github/scripts/rollback-apps.sh
+      - name: Summarize failed gate
+        if: failure()
+        env:
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          LOGIN_OUTCOME: ${{ steps.login.outcome }}
+          CAPTURE_OUTCOME: ${{ steps.capture.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          MIGRATION_OUTCOME: ${{ steps.migration.outcome }}
+          UPDATE_OUTCOME: ${{ steps.update.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+        run: |
+          set -euo pipefail
+          for name in preflight login capture build migration update smoke rollback; do
+            variable="${name^^}_OUTCOME"
+            if [[ ${!variable} == failure ]]; then
+              printf '%s\n' "- Failed gate: $name." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done

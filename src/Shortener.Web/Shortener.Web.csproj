@@ -1,16 +1,27 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
+  <PropertyGroup>
+    <!-- Keep patched cryptography packages in the app graph on .NET 10. -->
+    <RestoreEnablePackagePruning>false</RestoreEnablePackagePruning>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Shortener.Application\Shortener.Application.csproj" />
     <PackageReference Include="Microsoft.Identity.Web" Version="4.16.0" />
     <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.5.4" />
     <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Keys" Version="1.6.4" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.6.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.19.0" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.13" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.7" />
     <PackageReference Include="StackExchange.Redis" Version="2.13.17" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../Shared/ScaleoutHostConfiguration.cs" Link="ScaleoutHostConfiguration.cs" />
+    <Compile Include="../Shared/HardeningHostConfiguration.cs" Link="HardeningHostConfiguration.cs" />
+    <Compile Include="../Shared/TelemetryHostConfiguration.cs" Link="TelemetryHostConfiguration.cs" />
   </ItemGroup>
 
   <PropertyGroup>

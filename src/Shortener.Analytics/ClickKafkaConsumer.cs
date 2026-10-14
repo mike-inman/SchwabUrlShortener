@@ -53,6 +53,7 @@ public sealed class ClickKafkaConsumer : IDisposable
             };
             if (click is null || !click.IsValid() || result.Message.Key != click.MappingId)
                 throw new InvalidClickEventException("invalid_event");
+            using var processingActivity = ClickTraceContext.BeginConsume(result.Message.Headers, click.TraceId);
             var applied = await _store.ApplyAsync(click, cancellationToken);
             _consumer.Commit(result);
             _pendingOffset = null;

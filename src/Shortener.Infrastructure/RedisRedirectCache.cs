@@ -40,6 +40,7 @@ public sealed class RedisRedirectCache : IRedirectCache, IAsyncDisposable
 
     public async Task<RedirectTarget?> GetAsync(string shortCode, CancellationToken cancellationToken = default)
     {
+        using var activity = RedisTelemetry.Source.StartActivity("redis.redirect.get", System.Diagnostics.ActivityKind.Client);
         var db = (await GetConnectionAsync(cancellationToken)).GetDatabase();
         var value = await db.StringGetAsync(KeyFor(shortCode, _keyNamespace)).WaitAsync(OperationTimeout, cancellationToken);
         return value.IsNull ? null : JsonSerializer.Deserialize<RedirectTarget>((string)value!, JsonOptions);
@@ -48,6 +49,7 @@ public sealed class RedisRedirectCache : IRedirectCache, IAsyncDisposable
     public async Task SetAsync(RedirectTarget target, TimeSpan ttl, CancellationToken cancellationToken = default)
     {
         if (ttl <= TimeSpan.Zero) return;
+        using var activity = RedisTelemetry.Source.StartActivity("redis.redirect.set", System.Diagnostics.ActivityKind.Client);
         var db = (await GetConnectionAsync(cancellationToken)).GetDatabase();
         var value = JsonSerializer.Serialize(target, JsonOptions);
         await db.StringSetAsync(KeyFor(target.ShortCode, _keyNamespace), value, ttl).WaitAsync(OperationTimeout, cancellationToken);
@@ -55,6 +57,7 @@ public sealed class RedisRedirectCache : IRedirectCache, IAsyncDisposable
 
     public async Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default)
     {
+        using var activity = RedisTelemetry.Source.StartActivity("redis.ping", System.Diagnostics.ActivityKind.Client);
         try
         {
             _ = KeyFor("health", _keyNamespace);

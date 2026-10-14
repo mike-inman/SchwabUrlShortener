@@ -112,7 +112,7 @@ services:
     ports:
       - "127.0.0.1:63655:8080"
     volumes:
-      - webkeys:/root/.aspnet/DataProtection-Keys
+      - webkeys:/home/app/.aspnet/DataProtection-Keys
     networks: [schwab]
     depends_on:
       api: { condition: service_healthy }

@@ -164,8 +164,10 @@ public sealed class UrlShortenerService : IUrlShortenerService
         if (target.Mode == LinkMode.Managed)
         {
             var eventId = target.TenantId is { } tenant
-                ? await _repository.CaptureManagedClickAsync(target.Id, tenant, _clock.GetUtcNow(), Activity.Current?.Id, cancellationToken)
-                : await _repository.CaptureWorkspaceClickAsync(target.Id, target.OwnerWorkspaceId!.Value, _clock.GetUtcNow(), Activity.Current?.Id, cancellationToken);
+                ? await _repository.CaptureManagedClickAsync(target.Id, tenant, _clock.GetUtcNow(),
+                    Activity.Current?.IdFormat == ActivityIdFormat.W3C ? Activity.Current.Id : null, cancellationToken)
+                : await _repository.CaptureWorkspaceClickAsync(target.Id, target.OwnerWorkspaceId!.Value, _clock.GetUtcNow(),
+                    Activity.Current?.IdFormat == ActivityIdFormat.W3C ? Activity.Current.Id : null, cancellationToken);
             CapturedClicks.Add(1);
             _logger.LogInformation("Managed click captured. EventId={EventId} MappingId={MappingId} CorrelationId={CorrelationId}",
                 eventId, target.Id, Activity.Current?.Id);

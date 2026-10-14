@@ -1,5 +1,4 @@
 @page "/"
-@rendermode InteractiveServer
 @inject IShortenerApiClient Api
 @inject ILogger<Home> Logger
 
@@ -27,9 +26,9 @@
 
 <EditForm Model="form" OnSubmit="CreateAsync" FormName="guest-link" class="link-form">
     <label for="guest-url">Destination URL</label>
-    <input id="guest-url" class="form-control" type="url" required placeholder="https://example.com/page" @bind="form.OriginalUrl" />
+    <InputText id="guest-url" class="form-control" type="url" required placeholder="https://example.com/page" @bind-Value="form.OriginalUrl" />
     <label for="guest-code">Custom short code <span class="muted">(optional)</span></label>
-    <input id="guest-code" class="form-control" maxlength="64" @bind="form.ShortCode" />
+    <InputText id="guest-code" class="form-control" maxlength="64" @bind-Value="form.ShortCode" />
     <button class="btn btn-primary" type="submit" disabled="@busy">@(busy ? "Creating…" : "Create guest link")</button>
 </EditForm>
 
@@ -47,7 +46,9 @@
 </section>
 
 @code {
-    private readonly LinkForm form = new();
+    [SupplyParameterFromForm(Name = "form", FormName = "guest-link")]
+    private LinkForm? submittedForm { get; set; }
+    private LinkForm form => submittedForm ??= new();
     private bool busy;
     private string? error;
     private LinkResult? created;

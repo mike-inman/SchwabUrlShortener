@@ -25,6 +25,8 @@ if (args.Contains("--healthcheck", StringComparer.Ordinal))
 }
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
+HardeningHostConfiguration.AddConfiguredRateLimiting(builder.Services, builder.Configuration, web: true);
 builder.Services.AddLiveUpdates(builder.Configuration);
 var identityMode = builder.Configuration["Identity:Mode"];
 if (!string.IsNullOrWhiteSpace(identityMode) &&
@@ -35,6 +37,7 @@ var customerIdentity = string.Equals(identityMode, "Customer", StringComparison.
 
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
+var telemetry = TelemetryHostConfiguration.AddConfiguredTelemetry(builder, "shortener-web");
 var proxyTrustMode = ScaleoutHostConfiguration.ConfigureTrustedProxy(builder.Services, builder.Configuration);
 var dataProtectionMode = ScaleoutHostConfiguration.AddConfiguredDataProtection(builder.Services, builder.Configuration);
 var distributedCache = TokenCacheConfiguration.AddConfiguredTokenCache(builder.Services, builder.Configuration);
@@ -88,6 +91,7 @@ builder.Services.AddRazorComponents()
 var app = builder.Build();
 app.Logger.LogInformation("Scale-out configuration. DataProtectionMode={DataProtectionMode} TokenCacheMode={TokenCacheMode} ForwardedHeadersTrustMode={ForwardedHeadersTrustMode}",
     dataProtectionMode, distributedCache ? "Distributed" : "InMemory", proxyTrustMode);
+app.Logger.LogInformation("Telemetry configuration. Exporter={Exporter} SamplingRatio={SamplingRatio}", telemetry.Exporter, telemetry.SamplingRatio);
 _ = app.Services.GetRequiredService<Microsoft.AspNetCore.DataProtection.IDataProtectionProvider>()
     .CreateProtector("startup-check").Protect("startup-check");
 if (distributedCache)
@@ -104,7 +108,10 @@ if (!app.Environment.IsDevelopment())
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseForwardedHeaders();
+app.UseSecurityHeaders(web: true, app.Configuration);
+app.UsePublicHostRedirect(app.Configuration);
 app.UseHttpsRedirection();
+app.UseRouting();
 app.UseAuthentication();
 app.Use(async (context, next) =>
 {
@@ -120,6 +127,7 @@ app.Use(async (context, next) =>
     }
     await next();
 });
+app.UseRateLimiter();
 app.UseAuthorization();
 app.UseAntiforgery();
 app.Lifetime.ApplicationStarted.Register(() => app.Logger.LogInformation("Service started. Service={Service}", "web"));
