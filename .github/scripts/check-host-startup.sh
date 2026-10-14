@@ -19,6 +19,7 @@ check_host() {
     API)
       set -- "$@" \
         AzureAd__ClientId=00000000-0000-0000-0000-000000000000 \
+        VisitorHash__DailySecret=ci-startup-placeholder-visitor-hash-secret \
         'ConnectionStrings__ShortenerDb=Host=db;Port=5432;Database=Schwab_test_local;Username=shortener;Password=replace-with-a-long-random-local-password' \
         ConnectionStrings__Redis=redis:6379
       ;;
