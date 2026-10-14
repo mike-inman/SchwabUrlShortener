@@ -1,0 +1,16 @@
+title = "SchwabUrlShortener secret scan"
+
+[extend]
+useDefault = true
+
+# The expected request URI in ApiClientTests.cs line 102 is a synthetic
+# failure-path test value. Scope this to its introducing commit, statement,
+# file, and rule; later credentials in this test file must still be detected.
+[[allowlists]]
+description = "Synthetic expected request URI in ApiClientTests line 102"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+commits = ["09008b051e691b6adddddf83daec4af656f21dea"]
+paths = ['''^tests/Shortener\.WebTests/ApiClientTests\.cs$''']
+regexes = ['''^\s*Assert\.Equal\("[^"]+", request\.RequestUri!\.ToString\(\)\);$''']
