@@ -803,7 +803,8 @@ public class ShortenerApiTests
                 ["LiveUpdates:Mode"] = "Redis",
                 ["LiveUpdates:Channel"] = "shortener:links:v1",
                 ["LiveUpdates:DebounceMilliseconds"] = "1000",
-                ["RedirectCache:Namespace"] = RedisNamespace
+                ["RedirectCache:Namespace"] = RedisNamespace,
+                ["VisitorHash:DailySecret"] = "integration-test-secret-not-a-real-value"
             }));
             builder.ConfigureTestServices(services =>
             {

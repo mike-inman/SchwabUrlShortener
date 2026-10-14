@@ -62,6 +62,13 @@ builder.Services.AddSingleton<PostgresCustomerWorkspaces>();
 builder.Services.AddSingleton<IRedirectCache>(sp => new RedisRedirectCache(
     sp.GetRequiredService<IConfiguration>().GetConnectionString("Redis"),
     sp.GetRequiredService<IConfiguration>()["RedirectCache:Namespace"]));
+builder.Services.AddSingleton(sp =>
+{
+    var secret = sp.GetRequiredService<IConfiguration>()["VisitorHash:DailySecret"];
+    if (string.IsNullOrWhiteSpace(secret))
+        throw new InvalidOperationException("VisitorHash:DailySecret must be configured for managed click capture.");
+    return VisitorHashService.FromConfiguredSecret(secret);
+});
 builder.Services.AddSingleton<IUrlShortenerService, UrlShortenerService>();
 builder.Services.AddHealthChecks()
     .AddCheck<PostgresHealthCheck>("postgres", tags: ["ready"])
@@ -142,6 +149,7 @@ if (string.IsNullOrWhiteSpace(app.Configuration["AzureAd:ClientId"]))
 if (string.IsNullOrWhiteSpace(app.Configuration.GetConnectionString("ShortenerDb")))
     throw new InvalidOperationException("ConnectionStrings:ShortenerDb must be configured for PostgreSQL persistence.");
 _ = app.Services.GetRequiredService<NpgsqlDataSource>();
+_ = app.Services.GetRequiredService<VisitorHashService>();
 if (app.Environment.IsDevelopment()) app.MapOpenApi();
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
@@ -206,9 +214,14 @@ app.MapPost("/api/urls/managed", async (CreateUrlRequest request, ClaimsPrincipa
     catch (ShortCodeConflictException ex) { return Results.Conflict(new ApiError(ex.Message)); }
 }).WithName("CreateManagedLink").RequireAuthorization().RequireRateLimiting(HardeningHostConfiguration.ManagedPolicy);
 
-app.MapGet("/r/{shortCode}", async (string shortCode, IUrlShortenerService service, CancellationToken cancellationToken) =>
+app.MapGet("/r/{shortCode}", async (string shortCode, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
-    var mapping = await service.ResolveAsync(shortCode, cancellationToken);
+    var requestContext = new ClickRequestContext(
+        context.Connection.RemoteIpAddress?.ToString(),
+        context.Request.Headers.UserAgent.ToString(),
+        context.Request.Headers["Referer"].ToString(),
+        context.Request.Headers.AcceptLanguage.ToString());
+    var mapping = await service.ResolveAsync(shortCode, requestContext, cancellationToken);
     return mapping is null ? Results.NotFound(new ApiError("Link not found or expired.")) : Results.Redirect(mapping.OriginalUrl);
 }).WithName("ResolveShortUrl").AllowAnonymous().RequireRateLimiting(HardeningHostConfiguration.RedirectPolicy);
 

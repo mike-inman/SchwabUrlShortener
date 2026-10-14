@@ -200,7 +200,8 @@ public class UrlShortenerServiceTests
     }
 
     private static UrlShortenerService CreateService(TestRepository repo, TestCache cache, TimeProvider? clock = null) =>
-        new(repo, cache, new TestWorkspaceAccess(), clock ?? TimeProvider.System, NullLogger<UrlShortenerService>.Instance);
+        new(repo, cache, new TestWorkspaceAccess(), VisitorHashService.FromConfiguredSecret("unit-test-secret-not-a-real-value"),
+            clock ?? TimeProvider.System, NullLogger<UrlShortenerService>.Instance);
 
     private sealed class TestWorkspaceAccess : IWorkspaceLinkAccess
     {
@@ -229,12 +230,14 @@ public class UrlShortenerServiceTests
             return Task.FromResult(Guid.NewGuid());
         }
         public Task<Guid> CaptureWorkspaceClickAsync(string mappingId, Guid workspaceId, DateTimeOffset now,
-            string? traceId, CancellationToken cancellationToken = default)
+            string? traceId, ManagedClickSignal signal, CancellationToken cancellationToken = default)
         {
             _ = _items.Values.Single(x => x.Id == mappingId && x.OwnerWorkspaceId == workspaceId);
             CapturedClicks++;
+            LastSignal = signal;
             return Task.FromResult(Guid.NewGuid());
         }
+        public ManagedClickSignal? LastSignal { get; private set; }
     }
 
     private sealed class TestCache : IRedirectCache

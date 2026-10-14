@@ -21,8 +21,17 @@ public static class AnalyticsHost
             throw new InvalidOperationException("ConnectionStrings:ShortenerDb must be configured for click analytics.");
         var options = AnalyticsOptions.FromConfiguration(builder.Configuration);
         builder.Services.AddSingleton(new NpgsqlDataSourceBuilder(connectionString).Build());
+        builder.Services.AddSingleton<AggregateRebuildService>();
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton(sp => new AnalyticsReadiness(connectionString, options, sp.GetRequiredService<ILogger<AnalyticsReadiness>>()));
+
+        if (args.Contains("--rebuild-aggregates", StringComparer.Ordinal))
+        {
+            await using var rebuildHost = builder.Build();
+            var (hourly, dimension, visitor) = await rebuildHost.Services.GetRequiredService<AggregateRebuildService>().RebuildAsync();
+            Console.WriteLine($"Aggregate rebuild complete. Hourly={hourly} Dimension={dimension} Visitor={visitor}");
+            return;
+        }
 
         if (args.Contains("--healthcheck", StringComparer.Ordinal))
         {
@@ -37,6 +46,7 @@ public static class AnalyticsHost
         builder.Services.AddHostedService<OutboxWorker>();
         builder.Services.AddHostedService<ConsumerWorker>();
         builder.Services.AddHostedService<AnalyticsDependencyMonitor>();
+        builder.Services.AddHostedService<VisitorRetentionWorker>();
 
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS")))
             builder.WebHost.UseUrls("http://0.0.0.0:8080");

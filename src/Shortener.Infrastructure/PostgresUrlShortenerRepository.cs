@@ -122,14 +122,20 @@ public sealed class PostgresUrlShortenerRepository(
     }
 
     public async Task<Guid> CaptureWorkspaceClickAsync(string mappingId, Guid workspaceId, DateTimeOffset occurredAtUtc,
-        string? traceId, CancellationToken cancellationToken = default)
+        string? traceId, ManagedClickSignal signal, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(mappingId) || workspaceId == Guid.Empty)
             throw new ArgumentException("A managed link and workspace are required.");
         var eventId = Guid.NewGuid();
-        var count = await WithDbAsync("CaptureWorkspaceClick", db => db.Database.ExecuteSqlInterpolatedAsync(
-            $"INSERT INTO click_outbox (event_id, tenant_id, owner_workspace_id, event_version, mapping_id, short_code, occurred_at_utc, trace_id) SELECT {eventId}, NULL, owner_workspace_id, 2, id, short_code, {occurredAtUtc}, {traceId} FROM url_mappings WHERE id = {mappingId} AND mode = 1 AND tenant_id IS NULL AND owner_workspace_id = {workspaceId}",
-            cancellationToken), cancellationToken);
+        var count = await WithDbAsync("CaptureWorkspaceClick", db => db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO click_outbox (event_id, tenant_id, owner_workspace_id, event_version, mapping_id, short_code,
+                                       occurred_at_utc, trace_id, visitor_hash, referrer_group, referrer_host,
+                                       device_class, os_family, browser_family, language, is_bot)
+            SELECT {eventId}, NULL, owner_workspace_id, 3, id, short_code, {occurredAtUtc}, {traceId},
+                   {signal.VisitorHash}, {signal.ReferrerGroup}, {signal.ReferrerHost},
+                   {signal.DeviceClass}, {signal.OsFamily}, {signal.BrowserFamily}, {signal.Language}, {signal.IsBot}
+            FROM url_mappings WHERE id = {mappingId} AND mode = 1 AND tenant_id IS NULL AND owner_workspace_id = {workspaceId}
+            """, cancellationToken), cancellationToken);
         if (count != 1) throw new InvalidOperationException("Workspace link was not found for click capture.");
         return eventId;
     }

@@ -29,7 +29,8 @@ public sealed class ClickOutboxPublisher : IDisposable
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var select = new NpgsqlCommand("""
             SELECT event_id, tenant_id, mapping_id, short_code, occurred_at_utc, trace_id, attempts,
-                   event_version, owner_workspace_id
+                   event_version, owner_workspace_id, visitor_hash, referrer_group, referrer_host,
+                   device_class, os_family, browser_family, language, is_bot
             FROM click_outbox
             WHERE published_at_utc IS NULL AND failed_at_utc IS NULL AND next_attempt_at_utc <= now()
             ORDER BY captured_at_utc, event_id LIMIT 1 FOR UPDATE SKIP LOCKED
@@ -47,6 +48,12 @@ public sealed class ClickOutboxPublisher : IDisposable
                         reader.GetString(2), reader.GetString(3), reader.GetFieldValue<DateTimeOffset>(4), traceId),
                     2 when !reader.IsDBNull(8) => new ManagedClickEventV2(reader.GetGuid(0), reader.GetGuid(8),
                         reader.GetString(2), reader.GetString(3), reader.GetFieldValue<DateTimeOffset>(4), traceId),
+                    3 when !reader.IsDBNull(8) => new ManagedClickEventV3(reader.GetGuid(0), reader.GetGuid(8),
+                        reader.GetString(2), reader.GetString(3), reader.GetFieldValue<DateTimeOffset>(4), traceId,
+                        reader.GetString(9), reader.GetString(10),
+                        reader.IsDBNull(11) ? null : reader.GetString(11), reader.GetString(12),
+                        reader.IsDBNull(13) ? null : reader.GetString(13), reader.IsDBNull(14) ? null : reader.GetString(14),
+                        reader.IsDBNull(15) ? null : reader.GetString(15), reader.GetBoolean(16)),
                     _ => throw new InvalidOperationException("Unsupported click outbox event version.")
                 };
                 attempts = reader.GetInt32(6);
