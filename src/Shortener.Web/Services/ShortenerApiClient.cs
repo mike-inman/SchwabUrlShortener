@@ -193,7 +193,7 @@ public sealed class ShortenerApiClient : IShortenerApiClient
                     operation, (int)response.StatusCode, System.Diagnostics.Activity.Current?.Id);
                 throw new ShortenerApiException(response.StatusCode switch
                 {
-                    HttpStatusCode.BadRequest => "Check the URL and custom code, then try again.",
+                    HttpStatusCode.BadRequest => "Check the destination URL (it must start with http:// or https://) and the custom code (4–12 letters or numbers, no spaces or symbols).",
                     HttpStatusCode.Conflict => "That custom code is already in use. Choose another.",
                     HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => "Your managed-link access was denied. Sign in again or contact an administrator.",
                     HttpStatusCode.NotFound => "That managed link was not found in your tenant.",
