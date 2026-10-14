@@ -23,7 +23,7 @@ Implement the Track F handoff in `/Users/michaelinman/Repos/SchwabUrlShortener-c
 
 ## Pending gates and operator work
 
-- No branch push or pull request was made. Michael requested approval before either action. CI run URL: **none**; GitHub-hosted behavior is unverified.
+- Michael approved publication on 2026-10-14. `codex/cicd` was pushed at `e19de0a` and [draft PR #2](https://github.com/mike-inman/SchwabUrlShortener/pull/2) was opened against `main`.
 - GitHub reports this repository as **private** with zero configured environments at inspection. Required-reviewer protection must be confirmed available under Michael's GitHub plan before enabling `DEPLOY_ENABLED`; an unprotected auto-created `production` environment is not an approval gate.
 - Track C's current checkout has P1 foundation resources only. It has no P2 Container Apps or migration job, and `infra/main.bicep` accepts only `deploymentPhase=p1`. The deploy job is intentionally disabled and cannot be called operationally validated. Its what-if parsing, production identity permissions, image hook, migration, and public smoke path await P2 and a gated run.
 - Michael must configure the `production` environment reviewer, the dedicated federated deployment identity, repository variables, environment secrets only as required by the final Bicep, and finally `DEPLOY_ENABLED`; exact commands and sequence are in the runbook.
@@ -31,4 +31,10 @@ Implement the Track F handoff in `/Users/michaelinman/Repos/SchwabUrlShortener-c
 
 ## Outcome
 
-Track F files are ready for review locally. CI is not yet green because of the verified dependency advisories; remote CI, deployment, and operational acceptance are pending.
+Track F files are published for draft review. CI is not yet green because of the verified dependency advisories; deployment and operational acceptance are pending.
+
+## Remote CI — 2026-10-14 07:23 CDT
+
+The [first PR CI run](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38562714387) completed with failure. Its disposable Compose integration job succeeded: integration 27/27, unit 30/30, Web 59/59, then API/Web/Analytics startup passed. Bicep succeeded as an expected skip because Track C's Bicep has not merged. The dedicated vulnerability job failed on the same four High advisories found locally.
+
+The build job failed before its unit/Web steps because `-warnaserror` promoted NuGet's advisory warnings, including Moderate, into errors. Track F changed that job's restore/build commands to set `NuGetAudit=false` there; the separate required vulnerability job still audits and fails on High/Critical findings. The revised command passed a local Release build with zero warnings, and `actionlint` passed. A follow-up GitHub run is required to verify the build/test artifact lane.

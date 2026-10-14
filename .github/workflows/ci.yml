@@ -26,8 +26,10 @@ jobs:
           dotnet-version: 10.0.x
       - name: Restore and build with warnings as errors
         run: |
-          dotnet restore SchwabUrlShortener.slnx --nologo
-          dotnet build SchwabUrlShortener.slnx -c Release --no-restore --nologo -warnaserror
+          # The dedicated vulnerabilities job owns NuGet advisories; keep
+          # compiler and build warnings as errors in this independent job.
+          dotnet restore SchwabUrlShortener.slnx --nologo -p:NuGetAudit=false
+          dotnet build SchwabUrlShortener.slnx -c Release --no-restore --nologo -warnaserror -p:NuGetAudit=false
       - name: Unit tests
         run: dotnet test tests/Shortener.UnitTests/Shortener.UnitTests.csproj -c Release --no-build --no-restore --logger trx --results-directory TestResults/unit
       - name: Web tests without real Redis
