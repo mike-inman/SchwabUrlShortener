@@ -1,5 +1,5 @@
 ## Track C — Azure Lean Scalable Environment Handoff
-Status: drafted on 2026-10-13; **rewritten 18:50 CDT** for one lean environment, replacing the staging design. **Revised 19:00 CDT**: PostgreSQL VNet integration, Redis persistence, monitoring, and automated Kafka-lag scale demo restored.
+Status: drafted on 2026-10-13; **rewritten 18:50 CDT** for one lean environment, replacing the staging design. **Revised 19:00 CDT**: PostgreSQL VNet integration, Redis persistence, monitoring, and automated Kafka-lag scale demo restored. **Revised 19:10 CDT**: design principles; Event Hubs fixed at 1 throughput unit with an alert, auto-inflate disabled. **Revised 19:15 CDT**: Entra identity settings and Web client secret in Key Vault.
 You are working in /Users/michaelinman/Repos/SchwabUrlShortener-infra.
 
 Follow these repo standards exactly:
@@ -14,6 +14,7 @@ What changed and why:
 - The previous design priced at roughly USD 300–600/month; the target is roughly USD 40–70/month.
 - Azure Managed Redis `Balanced_B0`/`B1` were unavailable (`CacheCapacityUnavailable` in `centralus`; not creatable in `eastus2`). The subscription is a free trial and `Microsoft.Cache` is not registered. Redis now runs as a container, so no Redis SKU is needed.
 - Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. Never recreate it.
+- The contract's **Design principles** section governs every choice: low expected load, elastic scale-out and automatic retraction, cost-conscious without sacrificing security or performance, every lean choice naming its upgrade, and demonstrable scaling. `infra/README.md` opens with these principles and maps each resource to them.
 - Michael wants the environment to demonstrate good design principles. Low-cost controls stay in: PostgreSQL has no public endpoint, data services accept only the app subnet, Redis persists, and alerts are configured.
 
 Deployment authority:
@@ -45,7 +46,7 @@ P1 — Foundation and data (one approval)
 8. Storage account for Data Protection keys and Key Vault keys `dataprotection-api` and `dataprotection-web`, per the contract.
 9. PostgreSQL Flexible Server Burstable `Standard_B1ms`, PostgreSQL 17, 32 GiB, 7-day backups, **private access (VNet integration) in the delegated subnet, no public endpoint, no firewall rules**, TLS required, administrator `shortener`, database `shortener`. Read `max_connections` and record the connection-budget arithmetic from the contract. Private access cannot be changed after creation; verify it in the what-if before approval.
 10. Event Hubs Standard per the contract, with a Send/Listen-only authorization rule and network rules per the contract.
-11. Key Vault secrets `pg-app-connection`, `pg-migrate-connection`, `eventhubs-connection`, and `redis-connection` (with a generated Redis password; never printed).
+11. Key Vault secrets `pg-app-connection`, `pg-migrate-connection`, `eventhubs-connection`, `redis-connection` (with a generated Redis password; never printed), and `web-client-secret` from the secure `azd` value `WEB_CLIENT_SECRET`. Set `WEB_CLIENT_ID` in the `azd` environment yourself (it is not secret); ask Michael to set `WEB_CLIENT_SECRET` with a hidden-input command, as you did for the password. Apply the contract's Identity and Secret handling sections.
 12. Budget USD 100/month with alerts at 50/80/100% to `BUDGET_CONTACT_EMAIL`.
 12a. The separate Redis persistence storage account and Azure Files share `redis-data`, per the contract.
 12b. Diagnostic settings, one action group, and the alert rules listed under Monitoring in the contract. Record each rule's name and threshold.

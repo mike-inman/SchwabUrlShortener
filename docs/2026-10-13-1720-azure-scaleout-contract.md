@@ -1,6 +1,6 @@
 # Azure scale-out contract — 2026-10-13 17:20 CDT
 
-Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts`. **Revised 18:50 CDT: replaced the staging design with one lean, scalable environment** (no staging, no Front Door, no private endpoints, Burstable PostgreSQL, Redis as a container, `rg-schwab-url-shortener`). Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. **Revised 19:00 CDT: restored low-cost design controls** — PostgreSQL VNet integration (no public endpoint), Redis persistence, monitoring alerts and diagnostics, and an automated Kafka-lag scale demonstration. **Revised 19:05 CDT**: PostgreSQL pool size set to 2 for the 35-connection B1ms limit. Change this file only by editing it and telling every active track.
+Status: agreed baseline for Tracks A, B, and C. Revised 2026-10-13 17:50 CDT: Kafka topic corrected to `managed-clicks-v2`, internal API setting corrected to `ShortenerApi__AllowedInternalHttpHosts`, image build method added. Revised 17:58 CDT: Azure account, subscription, and tenant recorded. Revised 18:10 CDT: origin FQDNs added to `AllowedHosts`. **Revised 18:50 CDT: replaced the staging design with one lean, scalable environment** (no staging, no Front Door, no private endpoints, Burstable PostgreSQL, Redis as a container, `rg-schwab-url-shortener`). Michael approved deleting `rg-shortener-staging`; it was deleted at 18:49 CDT. **Revised 19:00 CDT: restored low-cost design controls** — PostgreSQL VNet integration (no public endpoint), Redis persistence, monitoring alerts and diagnostics, and an automated Kafka-lag scale demonstration. **Revised 19:05 CDT**: PostgreSQL pool size set to 2 for the 35-connection B1ms limit. **Revised 19:10 CDT**: design principles added; Event Hubs auto-inflate removed in favor of a fixed 1 throughput unit plus a throughput alert. **Revised 19:15 CDT**: Entra identity settings added, with the Web client secret stored in Key Vault; secret-handling rules stated. Change this file only by editing it and telling every active track.
 
 ## Purpose
 
@@ -22,6 +22,17 @@ There is exactly one Azure environment. It must:
 2. Cost little: small, consumption-billed, scale-to-small when idle.
 3. Visibly demonstrate how the system scales: real autoscale rules on every app, multiple replicas behind sticky sessions, Kafka-lag scaling, and a repeatable scale demonstration with recorded replica counts.
 4. Make the production upgrade path explicit: each lean choice names the one change that scales it further.
+
+## Design principles
+
+These govern every infrastructure choice and every future revision. A change that violates one must say so and why.
+
+1. **Expected load is low.** Size for it, not for imagined peaks.
+2. **Elastic, not idle-expensive.** Every component that can scale out under load must also retract when load falls, without manual action. Capacity that only grows (for example Event Hubs auto-inflate) is avoided or made an explicit, alerted, deliberate step.
+3. **Cost-conscious without sacrificing security.** Prefer free or near-free controls that keep the principle intact: private network access, service endpoints with subnet-only firewalls, managed identities, Key Vault, TLS everywhere, least-privilege roles. Paid controls (private endpoints, WAF) are documented production steps with their cost.
+4. **Cost-conscious without sacrificing performance.** No cold starts on user-facing paths (minimum 1 replica). Hard limits (database connections, throughput units) are sized with headroom and have an alert before they are reached.
+5. **Every lean choice names its upgrade.** For each small or single-instance component, document the one change that scales it further and its approximate cost.
+6. **Demonstrable.** Scaling out and back in is shown with a repeatable, bounded script and recorded replica counts, not only described.
 
 ## Environment
 
@@ -47,14 +58,14 @@ There is exactly one Azure environment. It must:
 | `ca-shortener-proxy` (only if native path routing is not used; see Public routing) | `caddy:2.10-alpine`, 0.25 vCPU / 0.5 GiB, min 1, max 2 | HTTP rule | Front Door Standard/Premium |
 | `caj-shortener-migrate` | Manual job, API image, `--migrate` | — | — |
 | PostgreSQL Flexible Server | Burstable `Standard_B1ms`, PostgreSQL 17, 32 GiB, 7-day backups, **private access (VNet integration), no public endpoint**, no PgBouncer | Connection budget sized to max replicas (below) | General Purpose tier plus built-in PgBouncer; zone-redundant high availability |
-| Event Hubs | Standard, 1 throughput unit, auto-inflate max 2, hub `managed-clicks-v2` with 32 partitions, 7-day retention, consumer group `shortener-analytics-v1` | Partitions already allow 32 consumers | More throughput units |
+| Event Hubs | Standard, **fixed 1 throughput unit, auto-inflate disabled** (it only grows and never retracts), hub `managed-clicks-v2` with 32 partitions, 7-day retention, consumer group `shortener-analytics-v1` | Partitions already allow 32 consumers; an alert fires when ingress exceeds 70% of one unit for 10 minutes | Raise throughput units deliberately when the alert shows sustained need |
 | Container Registry | Basic | — | — |
 | Key Vault | Standard, RBAC | — | Private endpoint |
 | Storage (Data Protection keys) | StorageV2, Standard_LRS, shared-key access disabled | — | Private endpoint |
 | Storage (Redis persistence) | Separate StorageV2 account, Standard_LRS, Azure Files share `redis-data` (1 GiB quota). Shared-key access is enabled on this account only, because Container Apps Azure Files mounts require the account key. | — | Not needed with Azure Managed Redis |
 | Log Analytics | Pay-as-you-go with a 1 GB/day ingestion cap | — | Remove cap, add alerts |
 | Budget | USD 100/month, alerts at 50/80/100% to `BUDGET_CONTACT_EMAIL` | — | — |
-| Monitoring | Diagnostic settings from PostgreSQL, Event Hubs, Key Vault, and the Container Apps environment to Log Analytics. Azure Monitor alerts, emailed to `BUDGET_CONTACT_EMAIL` through one action group: API or Web 5xx responses above 5% for 5 minutes; any app restarting repeatedly; Analytics consumer lag above 1,000 for 10 minutes; outbox oldest unpublished event above 5 minutes (from the existing `shortener.clicks.outbox.oldest_seconds` metric if exported, otherwise from logs); PostgreSQL CPU above 80% or connections above 80% of `max_connections` for 10 minutes. | Alerts show when scaling limits are reached | Paging, dashboards |
+| Monitoring | Diagnostic settings from PostgreSQL, Event Hubs, Key Vault, and the Container Apps environment to Log Analytics. Azure Monitor alerts, emailed to `BUDGET_CONTACT_EMAIL` through one action group: API or Web 5xx responses above 5% for 5 minutes; any app restarting repeatedly; Analytics consumer lag above 1,000 for 10 minutes; outbox oldest unpublished event above 5 minutes (from the existing `shortener.clicks.outbox.oldest_seconds` metric if exported, otherwise from logs); PostgreSQL CPU above 80% or connections above 80% of `max_connections` for 10 minutes; Event Hubs ingress above 70% of one throughput unit (about 0.7 MB/s or 700 events/s) for 10 minutes. | Alerts show when scaling limits are reached | Paging, dashboards |
 
 Minimum replicas are 1 (not 0) on API, Web, and Analytics so evaluators never wait for a cold start and click analytics stay prompt.
 
@@ -101,6 +112,27 @@ All settings use .NET double-underscore environment variable form. Every mode sw
 | `ConnectionStrings__ShortenerDb` (migrate job) | `Host=db;Port=5432;...` | Same, without `Maximum Pool Size` (Key Vault secret `pg-migrate-connection`) |
 | `AzureAd__ClientId` (API and migrate job) | private env file | `API_CLIENT_ID` from the `azd` environment: `34d681eb-4c10-402d-b1dd-1b02ad2d8d89` |
 | `AZURE_CLIENT_ID` | unset | client ID of the app's user-assigned managed identity |
+
+### Identity (Entra)
+
+Azure runs `Identity__Mode=Workforce` by default, using the existing registrations in tenant `mediaraq com`. Customer (External ID) mode is a separate, later choice, because the Web app runs one identity mode per deployment.
+
+| Setting | App | Azure value |
+|---|---|---|
+| `Identity__Mode` | Web | `Workforce` |
+| `AzureAd__Instance` | Web | `https://login.microsoftonline.com/` |
+| `AzureAd__TenantId` | API, Web, migrate | `organizations` |
+| `AzureAd__ClientId` | API, migrate | `API_CLIENT_ID` = `34d681eb-4c10-402d-b1dd-1b02ad2d8d89` (SchwabUrlShortener API) |
+| `AzureAd__ClientId` | Web | `WEB_CLIENT_ID` = `d4cd63a0-5583-41ad-a640-803ea76bb3a8` (SchwabUrlShortener Web) |
+| `AzureAd__ClientSecret` | Web | Key Vault secret `web-client-secret`, written by Bicep from the secure `azd` value `WEB_CLIENT_SECRET` |
+| `ShortenerApi__Scope` | Web | `api://34d681eb-4c10-402d-b1dd-1b02ad2d8d89/access_as_user` |
+
+### Secret handling
+
+- Every runtime secret lives in Key Vault and reaches apps only as a Container Apps Key Vault reference resolved with the app's managed identity: `pg-app-connection`, `pg-migrate-connection`, `eventhubs-connection`, `redis-connection`, `web-client-secret`.
+- Deployment-time inputs (`POSTGRES_PASSWORD`, `WEB_CLIENT_SECRET`) live only in the Git-ignored local `azd` environment file and are passed to Bicep as `@secure()` parameters. Bicep writes them into Key Vault through the control plane, so Key Vault's network rules do not block it. They never appear in outputs, logs, or chat.
+- One platform exception: Container Apps mounts Azure Files only with the storage account key, held in the environment's encrypted storage definition. It is scoped to the separate Redis persistence account; the Data Protection account keeps shared-key access disabled.
+- Passwordless access (Entra authentication to PostgreSQL and Event Hubs) removes the database password and Event Hubs connection string entirely. It needs application code changes and is a documented next step.
 
 ### Data Protection (Track A)
 
@@ -201,7 +233,8 @@ The Analytics worker serves `GET /health/live` and `GET /health/ready` on port `
 - `az login` and `azd auth login` as `social@mediaraq.com` (done 2026-10-13).
 - Owner on the subscription (confirmed 2026-10-13).
 - `POSTGRES_PASSWORD` in the `azd` environment; Track C copies it from the deleted staging environment's local file without displaying it.
-- Entra redirect URIs for the public host on the **SchwabUrlShortener Web** registration (`d4cd63a0-5583-41ad-a640-803ea76bb3a8`) and the External ID Web registration.
+- Set `WEB_CLIENT_SECRET` in the `azd` environment from the private file used locally (never in chat). If that secret has expired, create a new one on the SchwabUrlShortener Web registration under **Certificates & secrets**.
+- Entra redirect URIs for the public host on the **SchwabUrlShortener Web** registration (`d4cd63a0-5583-41ad-a640-803ea76bb3a8`).
 - Upgrade the free trial to Pay-As-You-Go before it ends.
 - After sign-in works: sign in once and create one managed demo link for the scale demonstration (Track C names the short code it needs).
 - Optional: a custom domain and DNS records.
