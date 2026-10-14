@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/mike-inman/SchwabUrlShortener/actions/workflows/ci.yml/badge.svg)](https://github.com/mike-inman/SchwabUrlShortener/actions/workflows/ci.yml)
 
-Updated: 2026-10-14 09:24 CDT
+Updated: 2026-10-14 09:36 CDT
 
 This repository contains a .NET 10 URL shortener prototype. Anonymous guest links expire after seven days. Workforce managed links use the validated token's tenant; customer managed links use application workspaces and memberships. PostgreSQL stores links, managed click outbox events, and aggregate counts. Redis caches public redirect mappings. Kafka carries managed click events to the Analytics worker. A Blazor Server app provides guest creation and a signed-in managed dashboard.
 
@@ -29,6 +29,12 @@ CI checks the .NET build and tests, disposable PostgreSQL/Redis/Kafka integratio
 - Analytics: `src/Shortener.Analytics` — PostgreSQL outbox publisher, Kafka consumer, deduplication, and tenant-aware aggregate updates.
 - Web: `src/Shortener.Web` — Interactive Server UI that acquires delegated API tokens on the server and calls the API over HTTP.
 - Tests: `tests/Shortener.UnitTests`, `tests/Shortener.IntegrationTests`, and `tests/Shortener.WebTests` — domain, real PostgreSQL/API, and Web regression coverage.
+
+## Ziplio Insights (2026-10-14)
+
+For customer workspace links, the signed-in dashboard links to `/dashboard/links/{shortCode}/insights`. Insights shows bot-excluded clicks over time, change from the previous equal period, estimated daily unique visitors, local-time busiest hour and heatmap, last click, top referrers, device share, and a batched seven-day sparkline per dashboard row. The page updates from the existing workspace live signal. Workforce links do not have this page.
+
+The API reduces the request IP and user agent to a daily HMAC visitor hash, and reduces referrers to a coarse group and host bucket. Raw IPs, full user agents, full referrer URLs, cookies, and client-side tracking are not stored or published for Insights. Hashes are removed after 35 days. Redirect totals may exceed Insights clicks because the redirect counter includes bots. Set `VisitorHash__DailySecret` to at least 32 random bytes in the API's private production configuration; the API refuses to start without it outside Development. The Development file has an obvious non-production value. Apply the `LinkInsightsCollection` migration before starting an API image that captures V3 clicks. See the [Track G ADR](docs/2026-10-13-1500-link-insights-collection-adr.md) for the event and endpoint contract.
 
 ## Setup
 

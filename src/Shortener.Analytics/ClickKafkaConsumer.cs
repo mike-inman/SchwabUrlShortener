@@ -62,12 +62,13 @@ public sealed class ClickKafkaConsumer : IDisposable
             _failureCount = 0;
             if (applied) ClickAnalyticsMetrics.Consumed.Add(1); else ClickAnalyticsMetrics.Deduplicated.Add(1);
             RecordLag(result);
-            if (applied)
+            if (applied && click is not ManagedClickEventV3 { IsBot: true })
             {
                 var change = click switch
                 {
                     ManagedClickEventV1 v1 => new LinkChange(LinkChangeScope.Tenant, v1.TenantId, v1.ShortCode),
                     ManagedClickEventV2 v2 => new LinkChange(LinkChangeScope.Workspace, v2.WorkspaceId, v2.ShortCode),
+                    ManagedClickEventV3 v3 => new LinkChange(LinkChangeScope.Workspace, v3.WorkspaceId, v3.ShortCode),
                     _ => throw new InvalidClickEventException("unsupported_version")
                 };
                 try { await _publisher.PublishAsync(change, cancellationToken); }

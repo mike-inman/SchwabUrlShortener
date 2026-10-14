@@ -10,8 +10,8 @@ public sealed class VisitorHashService(byte[] baseSecret)
 {
     public static VisitorHashService FromConfiguredSecret(string secret)
     {
-        if (string.IsNullOrWhiteSpace(secret) || secret.Length < 16)
-            throw new ArgumentException("A visitor-hash daily secret of at least 16 characters is required.", nameof(secret));
+        if (string.IsNullOrWhiteSpace(secret) || Encoding.UTF8.GetByteCount(secret) < 32)
+            throw new ArgumentException("A visitor-hash daily secret of at least 32 bytes is required.", nameof(secret));
         return new VisitorHashService(Encoding.UTF8.GetBytes(secret));
     }
 

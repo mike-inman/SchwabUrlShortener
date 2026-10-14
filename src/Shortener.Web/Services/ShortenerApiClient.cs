@@ -13,6 +13,14 @@ public sealed record ManagedLink(string ShortCode, string OriginalUrl, DateTimeO
     DateTimeOffset? LastAccessedAtUtc, int HitCount);
 public sealed record WorkspaceSummary(Guid Id, string Name, int Kind);
 public sealed record LinkResult(CreatedLink Link, Uri PublicUrl, bool AlreadyExists = false);
+public sealed record InsightPoint(DateTimeOffset BucketStartUtc, long Clicks);
+public sealed record InsightGroup(string Name, long Clicks);
+public sealed record InsightLastClick(DateTimeOffset OccurredAtUtc, string? ReferrerGroup, string? DeviceClass);
+public sealed record LinkInsights(long TotalClicks, long PreviousPeriodTotal, long UniqueVisitors,
+    IReadOnlyList<InsightPoint> TimeSeries, IReadOnlyList<InsightGroup> TopReferrers,
+    IReadOnlyList<InsightGroup> DeviceShares, InsightLastClick? LastClick,
+    IReadOnlyList<InsightPoint> HeatmapHours);
+public sealed record LinkSparkline(string ShortCode, IReadOnlyList<InsightPoint> Days);
 
 public interface IShortenerApiClient
 {
@@ -30,6 +38,10 @@ public interface IShortenerApiClient
     Task<ManagedLink> GetWorkspaceManagedLinkAsync(Guid workspaceId, string shortCode, ClaimsPrincipal user,
         CancellationToken cancellationToken = default) => throw new NotSupportedException();
     Task<ManagedLink> GetWorkspaceManagedAnalyticsAsync(Guid workspaceId, string shortCode, ClaimsPrincipal user,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    Task<LinkInsights> GetWorkspaceInsightsAsync(Guid workspaceId, string shortCode, string range, ClaimsPrincipal user,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    Task<IReadOnlyList<LinkSparkline>> GetWorkspaceSparklinesAsync(Guid workspaceId, int days, ClaimsPrincipal user,
         CancellationToken cancellationToken = default) => throw new NotSupportedException();
     Uri PublicUrl(string shortCode);
 }
@@ -98,6 +110,22 @@ public sealed class ShortenerApiClient : IShortenerApiClient
     {
         using var message = await AuthorizedRequestAsync(HttpMethod.Get, WorkspacePath(workspaceId) + "/" + Uri.EscapeDataString(shortCode) + "/analytics", user, cancellationToken);
         return await SendAsync<ManagedLink>(message, "load workspace analytics", cancellationToken);
+    }
+
+    public async Task<LinkInsights> GetWorkspaceInsightsAsync(Guid workspaceId, string shortCode, string range,
+        ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        using var message = await AuthorizedRequestAsync(HttpMethod.Get,
+            WorkspacePath(workspaceId) + "/" + Uri.EscapeDataString(shortCode) + "/insights?range=" + Uri.EscapeDataString(range), user, cancellationToken);
+        return await SendAsync<LinkInsights>(message, "load link insights", cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<LinkSparkline>> GetWorkspaceSparklinesAsync(Guid workspaceId, int days,
+        ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        using var message = await AuthorizedRequestAsync(HttpMethod.Get,
+            WorkspacePath(workspaceId) + "/sparklines?days=" + days, user, cancellationToken);
+        return await SendAsync<LinkSparkline[]>(message, "load link sparklines", cancellationToken);
     }
 
     public async Task<LinkResult> CreateGuestAsync(CreateLinkRequest request, CancellationToken cancellationToken = default)

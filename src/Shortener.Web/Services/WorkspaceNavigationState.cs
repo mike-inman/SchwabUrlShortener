@@ -32,8 +32,7 @@ public sealed class WorkspaceNavigationState
     {
         if (selectWorkspace != onSelect) return;
         selectWorkspace = null;
-        Workspaces = [];
-        SelectedId = null;
-        Changed?.Invoke();
+        // Keep the selected workspace while navigating from the dashboard to a link's Insights page.
+        // A new dashboard load replaces this list with fresh authorized workspaces.
     }
 }

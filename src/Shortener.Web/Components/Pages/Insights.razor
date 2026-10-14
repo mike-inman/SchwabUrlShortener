@@ -1,0 +1,87 @@
+@page "/dashboard/links/{ShortCode}/insights"
+@implements IAsyncDisposable
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject IShortenerApiClient Api
+@inject IdentityAvailability Identity
+@inject WorkspaceNavigationState Workspaces
+@inject Shortener.Web.Services.LiveUpdates.ILinkChangeSubscriber LiveUpdates
+@inject IConfiguration Configuration
+@inject IJSRuntime JS
+@inject ILogger<Insights> Logger
+@using Shortener.Web.Services.LiveUpdates
+
+<PageTitle>Ziplio Insights · @BrandText.TitleSuffix</PageTitle>
+<div class="insights-wrap">
+    <p class="insights-crumb"><a href="/dashboard">My links</a> / @ShortCode</p>
+    <header class="insights-head">
+        <div><p class="insights-eyebrow">Ziplio Insights</p><h1><span class="insights-code">@ShortCode</span></h1>
+            @if (link is not null) { <p class="insights-dest">→ @link.OriginalUrl</p> }
+        </div>
+        <div class="insights-tabs" role="group" aria-label="Time range">
+            @foreach (var choice in new[] { ("24h", "24 hours"), ("7d", "7 days"), ("30d", "30 days") })
+            {
+                <button type="button" aria-pressed="@(range == choice.Item1)" @onclick="() => SelectRangeAsync(choice.Item1)">@choice.Item2</button>
+            }
+        </div>
+    </header>
+    @if (error is not null) { <p class="alert alert-danger" role="alert">@error</p> }
+    @if (liveUpdateError) { <p class="alert alert-warning" role="status">Live updates are temporarily unavailable. Reconnecting automatically.</p> }
+    @if (loading) { <p role="status">Loading Insights…</p> }
+    else if (data is { } insights)
+    {
+        <p class="insights-note">Insights excludes detected bots, so counts may be lower than Redirects. Times shown in @(localTimeAvailable ? timeZone.Id : "UTC (local time unavailable)").</p>
+        <div class="insights-tiles">
+            <section class="insights-panel insights-tile"><h2>Clicks</h2><strong>@insights.TotalClicks</strong><p>@Trend(insights) vs previous period</p></section>
+            <section class="insights-panel insights-tile"><h2>Unique visitors</h2><strong>@insights.UniqueVisitors</strong><p>Estimated, no raw IPs stored</p></section>
+            <section class="insights-panel insights-tile"><h2>Busiest hour</h2><strong>@BusiestHour(insights)</strong><p>Last 28 days, local time</p></section>
+            <section class="insights-panel insights-tile"><h2>Last click</h2><strong>@LastClickTime(insights)</strong><p>@LastClickDetail(insights)</p></section>
+        </div>
+        @if (insights.TotalClicks == 0)
+        {
+            <p class="insights-panel insights-empty" role="status">No clicks yet. Share your link to start seeing activity.</p>
+        }
+        else if (!browserReady)
+        {
+            <p role="status">Preparing charts…</p>
+        }
+        else
+        {
+            <section class="insights-panel" aria-labelledby="insights-clicks-heading">
+                <div class="insights-panel-head"><h2 id="insights-clicks-heading">Clicks over time</h2><span>@(range == "24h" ? "Hourly" : "Daily"), last @range</span></div>
+                <ApexChart TItem="InsightPoint" @ref="clickChart" Options="clickOptions" Height="320">
+                    <ApexPointSeries TItem="InsightPoint" Items="insights.TimeSeries" Name="Clicks" SeriesType="SeriesType.Area"
+                        XValue="p => BucketLabel(p)" YValue="p => p.Clicks" />
+                </ApexChart>
+                <p class="visually-hidden">@insights.TotalClicks clicks in @range. @Trend(insights) compared with the previous period.</p>
+            </section>
+            <div class="insights-grid2">
+                <section class="insights-panel" aria-labelledby="insights-referrers-heading">
+                    <div class="insights-panel-head"><h2 id="insights-referrers-heading">Top referrers</h2><span>Share of clicks</span></div>
+                    <ApexChart TItem="InsightGroup" @ref="referrerChart" Options="referrerOptions" Height="260">
+                        <ApexPointSeries TItem="InsightGroup" Items="insights.TopReferrers" Name="Clicks" SeriesType="SeriesType.Bar" XValue="p => p.Name" YValue="p => p.Clicks" />
+                    </ApexChart>
+                    <p class="visually-hidden">@string.Join(", ", insights.TopReferrers.Select(x => $"{x.Name}: {x.Clicks}"))</p>
+                </section>
+                <section class="insights-panel" aria-labelledby="insights-devices-heading">
+                    <div class="insights-panel-head"><h2 id="insights-devices-heading">Devices</h2><span>Bots excluded</span></div>
+                    <ApexChart TItem="InsightGroup" @ref="deviceChart" Options="deviceOptions" Height="260">
+                        <ApexPointSeries TItem="InsightGroup" Items="insights.DeviceShares" Name="Clicks" SeriesType="SeriesType.Donut" XValue="p => p.Name" YValue="p => p.Clicks" />
+                    </ApexChart>
+                    <p class="visually-hidden">@string.Join(", ", insights.DeviceShares.Select(x => $"{x.Name}: {x.Clicks}"))</p>
+                </section>
+            </div>
+            <section class="insights-panel" aria-labelledby="insights-heat-heading">
+                <div class="insights-panel-head"><h2 id="insights-heat-heading">When your audience clicks</h2><span>Weekday and hour, your local time</span></div>
+                <ApexChart TItem="HeatCell" @ref="heatChart" Options="heatOptions" Height="300">
+                    @foreach (var day in Weekdays)
+                    {
+                        <ApexPointSeries TItem="HeatCell" Items="heatCells.Where(x => x.Weekday == day).ToArray()" Name="@day"
+                            SeriesType="SeriesType.Heatmap" XValue="p => p.HourLabel" YValue="p => p.Clicks" />
+                    }
+                </ApexChart>
+                <p class="visually-hidden">@HeatSummary()</p>
+            </section>
+        }
+    }
+</div>

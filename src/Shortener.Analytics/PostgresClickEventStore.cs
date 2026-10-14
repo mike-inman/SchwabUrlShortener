@@ -180,7 +180,7 @@ public sealed class PostgresClickEventStore(NpgsqlDataSource dataSource)
 
         await using (var hourly = new NpgsqlCommand("""
             INSERT INTO link_click_hourly (mapping_id, owner_workspace_id, bucket_start_utc, clicks)
-            VALUES (@mapping_id, @owner_workspace_id, date_trunc('hour', @occurred_at_utc), 1)
+            VALUES (@mapping_id, @owner_workspace_id, date_trunc('hour', @occurred_at_utc AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', 1)
             ON CONFLICT (mapping_id, bucket_start_utc) DO UPDATE SET clicks = link_click_hourly.clicks + 1
             """, connection, transaction))
         {
@@ -197,7 +197,7 @@ public sealed class PostgresClickEventStore(NpgsqlDataSource dataSource)
         {
             await using var dim = new NpgsqlCommand("""
                 INSERT INTO link_click_dimension_daily (mapping_id, owner_workspace_id, bucket_date_utc, dimension, dimension_key, clicks)
-                VALUES (@mapping_id, @owner_workspace_id, date_trunc('day', @occurred_at_utc)::date, @dimension, @key, 1)
+                VALUES (@mapping_id, @owner_workspace_id, (@occurred_at_utc AT TIME ZONE 'UTC')::date, @dimension, @key, 1)
                 ON CONFLICT (mapping_id, bucket_date_utc, dimension, dimension_key) DO UPDATE SET clicks = link_click_dimension_daily.clicks + 1
                 """, connection, transaction);
             dim.Parameters.AddWithValue("mapping_id", mappingId);
@@ -211,7 +211,7 @@ public sealed class PostgresClickEventStore(NpgsqlDataSource dataSource)
         if (visitorHash is null) return;
         await using (var visitor = new NpgsqlCommand("""
             INSERT INTO link_visitor_daily (mapping_id, owner_workspace_id, bucket_date_utc, visitor_hash)
-            VALUES (@mapping_id, @owner_workspace_id, date_trunc('day', @occurred_at_utc)::date, @visitor_hash)
+            VALUES (@mapping_id, @owner_workspace_id, (@occurred_at_utc AT TIME ZONE 'UTC')::date, @visitor_hash)
             ON CONFLICT (mapping_id, bucket_date_utc, visitor_hash) DO NOTHING
             """, connection, transaction))
         {
