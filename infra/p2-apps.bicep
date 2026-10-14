@@ -9,6 +9,7 @@ param redisImage string
 param apiClientId string
 param webClientId string
 param enableScaleOutSettings bool = true
+param customDomain string = 'ziplio.io'
 
 var suffix = substring(uniqueString(resourceGroup().id), 0, 6)
 var tags = {
@@ -67,7 +68,8 @@ resource redisFiles 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
   }
 }
 
-var publicHost = '${routeName}.${environment.properties.defaultDomain}'
+var routeHost = '${routeName}.${environment.properties.defaultDomain}'
+var publicHost = empty(customDomain) ? routeHost : customDomain
 var vaultBase = 'https://${vault.name}.vault.azure.net/secrets/'
 var dpBlobBase = 'https://${dpStorage.name}.blob.core.windows.net/dataprotection/'
 var dpKeyBase = 'https://${vault.name}.vault.azure.net/keys/'
@@ -147,7 +149,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
           { name: 'AzureAd__Instance', value: 'https://schwaburlshortener.ciamlogin.com/' }
           { name: 'AzureAd__TenantId', value: '6adc36e9-dfe5-469f-8aed-6ef83abcdd19' }
           { name: 'AzureAd__ClientId', value: apiClientId }
-          { name: 'AllowedHosts', value: 'ca-shortener-api.${environment.properties.defaultDomain};ca-shortener-api;${publicHost}' }
+          { name: 'AllowedHosts', value: 'ca-shortener-api.${environment.properties.defaultDomain};ca-shortener-api;${routeHost};${publicHost};www.ziplio.io' }
           { name: 'PublicLinks__BaseUrl', value: 'https://${publicHost}/' }
         ], apiScaleEnv, appInsightsEnv)
         resources: { cpu: json('0.25'), memory: '0.5Gi' }
@@ -207,7 +209,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
           { name: 'ShortenerApi__Scope', value: 'api://${apiClientId}/access_as_user' }
           { name: 'ShortenerApi__BaseUrl', value: 'http://ca-shortener-api/' }
           { name: 'ShortenerApi__AllowedInternalHttpHosts', value: 'ca-shortener-api' }
-          { name: 'AllowedHosts', value: 'ca-shortener-web.${environment.properties.defaultDomain};${publicHost}' }
+          { name: 'AllowedHosts', value: 'ca-shortener-web.${environment.properties.defaultDomain};${routeHost};${publicHost};www.ziplio.io' }
           { name: 'PublicLinks__BaseUrl', value: 'https://${publicHost}/' }
         ], webScaleEnv, appInsightsEnv)
         resources: { cpu: json('0.25'), memory: '0.5Gi' }
@@ -334,6 +336,10 @@ resource route 'Microsoft.App/managedEnvironments/httpRouteConfigs@2024-10-02-pr
   parent: environment
   name: routeName
   properties: {
+    customDomains: [
+      { name: 'ziplio.io', bindingType: 'Auto' }
+      { name: 'www.ziplio.io', bindingType: 'Auto' }
+    ]
     rules: [
       { description: 'API', routes: [ { match: { pathSeparatedPrefix: '/api' } }, { match: { pathSeparatedPrefix: '/r' } }, { match: { pathSeparatedPrefix: '/health' } } ], targets: [ { containerApp: api.name } ] }
       { description: 'Web', routes: [ { match: { prefix: '/' } } ], targets: [ { containerApp: web.name } ] }
