@@ -67,7 +67,11 @@ public static class ScaleoutHostConfiguration
             foreach (var address in addresses) options.KnownProxies.Add(address);
             foreach (var network in cidrs) options.KnownIPNetworks.Add(network);
             var publicUrl = configuration["PublicLinks:BaseUrl"];
-            if (Uri.TryCreate(publicUrl, UriKind.Absolute, out var uri)) options.AllowedHosts.Add(uri.Host);
+            if (Uri.TryCreate(publicUrl, UriKind.Absolute, out var uri))
+            {
+                options.AllowedHosts.Add(uri.Host);
+                options.AllowedHosts.Add("www." + uri.Host);
+            }
         });
         return addresses.Length > 0 ? "KnownProxyHost" : "KnownNetworks";
     }

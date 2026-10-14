@@ -74,7 +74,7 @@ services:
       ConnectionStrings__ShortenerDb: Host=db;Port=5432;Database=shortener;Username=shortener;Password=${POSTGRES_PASSWORD}
       ConnectionStrings__Redis: redis:6379
       PublicLinks__BaseUrl: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL in the chosen env file}
-      AllowedHosts: ${PUBLIC_DOMAIN:-localhost};api
+      AllowedHosts: ${PUBLIC_DOMAIN:-localhost};www.${PUBLIC_DOMAIN:-localhost};api
     depends_on:
       db:
         condition: service_healthy
@@ -96,7 +96,7 @@ services:
       DataProtection__Mode: Filesystem
       DataProtection__ApplicationName: Shortener.Api
     volumes:
-      - api_keys:/root/.aspnet/DataProtection-Keys
+      - api_keys:/home/app/.aspnet/DataProtection-Keys
     healthcheck:
       test: ["CMD", "dotnet", "Shortener.Api.dll", "--healthcheck"]
       interval: 10s
@@ -128,7 +128,7 @@ services:
       ShortenerApi__AllowedInternalHttpHosts: api
       ShortenerApi__Scope: ${API_SCOPE:-}
       PublicLinks__BaseUrl: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL in the chosen env file}
-      AllowedHosts: ${PUBLIC_DOMAIN:-localhost}
+      AllowedHosts: ${PUBLIC_DOMAIN:-localhost};www.${PUBLIC_DOMAIN:-localhost}
       ForwardedHeaders__KnownProxyHost: proxy
       TokenCache__Mode: Distributed
       TokenCache__InstanceName: "shortener:web:tokens:"
@@ -139,7 +139,7 @@ services:
       AzureAd__ClientId: ${WEB_CLIENT_ID:-}
       AzureAd__ClientSecret: ${WEB_CLIENT_SECRET:-}
     volumes:
-      - web_keys:/root/.aspnet/DataProtection-Keys
+      - web_keys:/home/app/.aspnet/DataProtection-Keys
     healthcheck:
       test: ["CMD", "dotnet", "Shortener.Web.dll", "--healthcheck"]
       interval: 10s

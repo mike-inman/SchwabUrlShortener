@@ -9,6 +9,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Identity.Web;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
+using OpenTelemetry.Trace;
 using Shortener.Application;
 using Shortener.Application.Interfaces;
 using Shortener.Domain;
@@ -30,11 +31,15 @@ if (args.Contains("--healthcheck", StringComparer.Ordinal))
 }
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
+HardeningHostConfiguration.AddConfiguredRateLimiting(builder.Services, builder.Configuration);
 if (!args.Contains("--migrate", StringComparer.Ordinal)) builder.Services.AddLiveUpdates(builder.Configuration);
 
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
+var telemetry = TelemetryHostConfiguration.AddConfiguredTelemetry(builder, "shortener-api");
+builder.Services.ConfigureOpenTelemetryTracerProvider((_, traces) => traces.AddNpgsql());
 var proxyTrustMode = ScaleoutHostConfiguration.ConfigureTrustedProxy(builder.Services, builder.Configuration);
 var migrationOnly = args.Contains("--migrate", StringComparer.Ordinal);
 var dataProtectionMode = migrationOnly ? "MigrationOnly" :
@@ -127,6 +132,7 @@ builder.Services.AddAuthorization(options =>
 
 var app = builder.Build();
 app.Logger.LogInformation("Scale-out configuration. DataProtectionMode={DataProtectionMode} ForwardedHeadersTrustMode={ForwardedHeadersTrustMode}", dataProtectionMode, proxyTrustMode);
+app.Logger.LogInformation("Telemetry configuration. Exporter={Exporter} SamplingRatio={SamplingRatio}", telemetry.Exporter, telemetry.SamplingRatio);
 if (!migrationOnly)
     _ = app.Services.GetRequiredService<Microsoft.AspNetCore.DataProtection.IDataProtectionProvider>()
         .CreateProtector("startup-check").Protect("startup-check");
@@ -145,7 +151,10 @@ app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
     await Results.Problem(title: "Unable to process the request.", statusCode: 500).ExecuteAsync(context);
 }));
 app.UseForwardedHeaders();
+app.UseSecurityHeaders(web: false, app.Configuration);
+app.UsePublicHostRedirect(app.Configuration);
 app.UseHttpsRedirection();
+app.UseRouting();
 app.UseAuthentication();
 app.Use(async (context, next) =>
 {
@@ -154,6 +163,7 @@ app.Use(async (context, next) =>
         app.Logger.LogWarning("Managed operation rejected: unauthenticated. CorrelationId={CorrelationId}", context.TraceIdentifier);
     await next(context);
 });
+app.UseRateLimiter();
 app.UseAuthorization();
 app.Lifetime.ApplicationStarted.Register(() => app.Logger.LogInformation("Service started. Service={Service}", "api"));
 app.Lifetime.ApplicationStopping.Register(() => app.Logger.LogInformation("Service stopping. Service={Service}", "api"));
@@ -166,7 +176,7 @@ app.MapGet("/api/me/workspaces", async (ClaimsPrincipal principal, HttpContext c
 {
     if (!TryGetValidatedIdentity(principal, context, out var issuer, out var subject)) return Results.Forbid();
     return Results.Ok(await workspaces.GetOrCreateAsync(issuer, subject, cancellationToken));
-}).WithName("GetMyWorkspaces").RequireAuthorization();
+}).WithName("GetMyWorkspaces").RequireAuthorization().RequireRateLimiting(HardeningHostConfiguration.ManagedPolicy);
 
 app.MapPost("/api/urls/guest", async (CreateUrlRequest request, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
@@ -177,7 +187,7 @@ app.MapPost("/api/urls/guest", async (CreateUrlRequest request, IUrlShortenerSer
     }
     catch (ArgumentException ex) { return Results.BadRequest(new ApiError(ex.Message)); }
     catch (ShortCodeConflictException ex) { return Results.Conflict(new ApiError(ex.Message)); }
-}).WithName("CreateGuestLink").AllowAnonymous();
+}).WithName("CreateGuestLink").AllowAnonymous().RequireRateLimiting(HardeningHostConfiguration.GuestCreatePolicy);
 
 app.MapPost("/api/urls/managed", async (CreateUrlRequest request, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, ILinkChangePublisher publisher, CancellationToken cancellationToken) =>
 {
@@ -194,13 +204,13 @@ app.MapPost("/api/urls/managed", async (CreateUrlRequest request, ClaimsPrincipa
     }
     catch (ArgumentException ex) { return Results.BadRequest(new ApiError(ex.Message)); }
     catch (ShortCodeConflictException ex) { return Results.Conflict(new ApiError(ex.Message)); }
-}).WithName("CreateManagedLink").RequireAuthorization();
+}).WithName("CreateManagedLink").RequireAuthorization().RequireRateLimiting(HardeningHostConfiguration.ManagedPolicy);
 
 app.MapGet("/r/{shortCode}", async (string shortCode, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
     var mapping = await service.ResolveAsync(shortCode, cancellationToken);
     return mapping is null ? Results.NotFound(new ApiError("Link not found or expired.")) : Results.Redirect(mapping.OriginalUrl);
-}).WithName("ResolveShortUrl").AllowAnonymous();
+}).WithName("ResolveShortUrl").AllowAnonymous().RequireRateLimiting(HardeningHostConfiguration.RedirectPolicy);
 
 app.MapGet("/api/urls/managed/{shortCode}", async (string shortCode, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
@@ -208,7 +218,7 @@ app.MapGet("/api/urls/managed/{shortCode}", async (string shortCode, ClaimsPrinc
     if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
     var mapping = await service.GetManagedAsync(tenantId, shortCode, cancellationToken);
     return mapping is null ? Results.NotFound(new ApiError("Managed link not found.")) : Results.Ok(ToManagedResponse(mapping));
-}).WithName("GetManagedLink").RequireAuthorization();
+}).WithName("GetManagedLink").RequireAuthorization().RequireRateLimiting(HardeningHostConfiguration.ManagedPolicy);
 
 app.MapGet("/api/urls/managed/{shortCode}/analytics", async (string shortCode, ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
@@ -216,7 +226,7 @@ app.MapGet("/api/urls/managed/{shortCode}/analytics", async (string shortCode, C
     if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
     var mapping = await service.GetManagedAsync(tenantId, shortCode, cancellationToken);
     return mapping is null ? Results.NotFound(new ApiError("Managed link not found.")) : Results.Ok(ToManagedResponse(mapping));
-}).WithName("GetManagedLinkAnalytics").RequireAuthorization();
+}).WithName("GetManagedLinkAnalytics").RequireAuthorization().RequireRateLimiting(HardeningHostConfiguration.ManagedPolicy);
 
 app.MapGet("/api/urls/managed/analytics", async (ClaimsPrincipal principal, HttpContext context, IUrlShortenerService service, CancellationToken cancellationToken) =>
 {
@@ -224,9 +234,10 @@ app.MapGet("/api/urls/managed/analytics", async (ClaimsPrincipal principal, Http
     if (!TryGetTenant(principal, context, out var tenantId)) return Results.Forbid();
     var mappings = await service.GetManagedAnalyticsAsync(tenantId, cancellationToken);
     return Results.Ok(mappings.Select(ToManagedResponse).ToArray());
-}).WithName("GetManagedAnalytics").RequireAuthorization();
+}).WithName("GetManagedAnalytics").RequireAuthorization().RequireRateLimiting(HardeningHostConfiguration.ManagedPolicy);
 
-var workspaceManaged = app.MapGroup("/api/workspaces/{workspaceId:guid}/urls/managed").RequireAuthorization();
+var workspaceManaged = app.MapGroup("/api/workspaces/{workspaceId:guid}/urls/managed").RequireAuthorization()
+    .RequireRateLimiting(HardeningHostConfiguration.ManagedPolicy);
 workspaceManaged.MapPost("", async (Guid workspaceId, CreateUrlRequest request, ClaimsPrincipal principal,
     HttpContext context, IUrlShortenerService service, ILinkChangePublisher publisher, CancellationToken cancellationToken) =>
 {

@@ -9,10 +9,14 @@
 
   <ItemGroup>
     <PackageReference Include="Confluent.Kafka" Version="2.16.0" />
+    <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.6.0" />
+    <PackageReference Include="Npgsql.OpenTelemetry" Version="10.0.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.19.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Shortener.Application\Shortener.Application.csproj" />
     <ProjectReference Include="..\Shortener.Infrastructure\Shortener.Infrastructure.csproj" />
+    <Compile Include="../Shared/TelemetryHostConfiguration.cs" Link="TelemetryHostConfiguration.cs" />
   </ItemGroup>
 </Project>

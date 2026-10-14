@@ -55,10 +55,12 @@ public sealed class ClickOutboxPublisher : IDisposable
         if (click is null) return PublishOutcome.NoWork;
         try
         {
+            var (activity, headers) = ClickTraceContext.BeginPublish(click.TraceId);
+            using var publishActivity = activity;
             var payload = JsonSerializer.Serialize(click, click.GetType());
             // Mapping ID keeps all events for one link on a stable Kafka partition.
             await _producer.ProduceAsync(_options.Topic,
-                new Message<string, string> { Key = click.MappingId, Value = payload }, cancellationToken)
+                new Message<string, string> { Key = click.MappingId, Value = payload, Headers = headers }, cancellationToken)
                 .WaitAsync(TimeSpan.FromSeconds(16), cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)

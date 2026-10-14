@@ -1,6 +1,8 @@
 using Shortener.Analytics;
 using Npgsql;
+using OpenTelemetry.Trace;
 using Shortener.Infrastructure.LiveUpdates;
+using Shortener.Shared;
 
 namespace Shortener.Analytics;
 
@@ -12,6 +14,8 @@ public static class AnalyticsHost
         builder.Services.AddLiveUpdates(builder.Configuration);
         builder.Logging.ClearProviders();
         builder.Logging.AddJsonConsole();
+        var telemetry = TelemetryHostConfiguration.AddConfiguredTelemetry(builder, "shortener-analytics");
+        builder.Services.ConfigureOpenTelemetryTracerProvider((_, traces) => traces.AddNpgsql());
         var connectionString = builder.Configuration.GetConnectionString("ShortenerDb");
         if (string.IsNullOrWhiteSpace(connectionString))
             throw new InvalidOperationException("ConnectionStrings:ShortenerDb must be configured for click analytics.");
@@ -37,6 +41,7 @@ public static class AnalyticsHost
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS")))
             builder.WebHost.UseUrls("http://0.0.0.0:8080");
         var app = builder.Build();
+        app.Logger.LogInformation("Telemetry configuration. Exporter={Exporter} SamplingRatio={SamplingRatio}", telemetry.Exporter, telemetry.SamplingRatio);
         app.Lifetime.ApplicationStarted.Register(() => app.Logger.LogInformation("Service started. Service={Service}", "analytics"));
         app.Lifetime.ApplicationStopping.Register(() => app.Logger.LogInformation("Service stopping. Service={Service}", "analytics"));
         app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));

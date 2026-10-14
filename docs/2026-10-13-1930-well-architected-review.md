@@ -32,9 +32,9 @@ Priority:
 
 | # | Gap | Why it matters | Action | Cost | Priority | Owner |
 |---|---|---|---|---|---|---|
-| S1 | Containers run as `root` (no `USER` in `Dockerfile`) | A compromised process gets root inside the container; reviewers check this | Run API, Web, and Analytics as the built-in non-root `app` user (`USER $APP_UID`). Move the Filesystem Data Protection path and Compose key volumes from `/root/.aspnet` to the `app` user's home, preserving existing local key volumes. | Free | P0 | Track D |
-| S2 | No rate limiting on public endpoints | Guest link creation is anonymous: abuse, spam links, and cost-driven denial of service | ASP.NET Core rate limiter: per-client fixed window on `POST /api/urls/guest` and the guest create form, a generous limit on `/r/*`, keyed on the forwarded client IP (correct only with Track A's trusted-proxy settings). Return 429 with `Retry-After`. | Free | P0 | Track D |
-| S3 | Only HSTS is set; no other security headers | Clickjacking, MIME sniffing, and script injection defenses missing | Web: `Content-Security-Policy` compatible with Blazor Server (`default-src 'self'`, `connect-src 'self' wss:`, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` minimal. API: `nosniff` and `frame-ancestors 'none'`. Test that sign-in, the dashboard, and live updates still work. | Free | P0 | Track D |
+| S1 | Containers run as `root` (no `USER` in `Dockerfile`) | A compromised process gets root inside the container; reviewers check this | Implemented in Track D; disposable API, Web, and Analytics containers ran as UID 1654. Existing key volumes need a backed-up, one-time ownership change before non-root startup. Cloud deployment pending. | Free | P0 | Track D — local verified |
+| S2 | No rate limiting on public endpoints | Guest link creation is anonymous: abuse, spam links, and cost-driven denial of service | Implemented configurable guest, redirect, and managed policies in Track D; disposable HTTP and tests verify 429/`Retry-After`. Cloud load validation pending. | Free | P0 | Track D — local verified |
+| S3 | Only HSTS is set; no other security headers | Clickjacking, MIME sniffing, and script injection defenses missing | Implemented Web/API headers and nonce-based Web CSP in Track D; local WebSocket handshake and HTTP checks passed. Live signed-in dashboard and Entra flow remain unverified. | Free | P0 | Track D — partial local verification |
 | S4 | Web uses an Entra client secret | Secrets expire and can leak; Microsoft recommends no secrets where possible | Use the Web app's managed identity as a federated credential on the SchwabUrlShortener Web registration (`SignedAssertionFromManagedIdentity` in Microsoft.Identity.Web), so Azure needs no client secret. Keep the secret only for local development. Verify support for this multitenant registration before adopting; if unsupported, keep the Key Vault secret and record why. | Free | P1 | Track C (config) + Michael (registration) |
 | S5 | Storage, Event Hubs, PostgreSQL minimum TLS and storage public-blob settings not explicit | Defaults vary by resource and API version | Set minimum TLS 1.2 everywhere, secure transfer required, public blob access disabled, ACR anonymous pull disabled. | Free | P0 | Track C |
 | S6 | No posture assessment | Reviewers ask "how do you know it is secure?" | Enable Microsoft Defender for Cloud foundational CSPM (free tier) on the subscription, record the secure score and remediate free recommendations for this resource group. | Free | P1 | Track C |
@@ -63,9 +63,9 @@ Priority:
 
 | # | Gap | Action | Cost | Priority | Owner |
 |---|---|---|---|---|---|
-| P1 | Metrics and traces are defined in code but not exported; Application Insights is configured with nothing sending to it; Slice 7 recorded per-event trace correlation as unverified | Add the Azure Monitor OpenTelemetry distro to API, Web, and Analytics: request, dependency, and exception traces, the existing `shortener.*` meters, and trace context propagated API → outbox → Kafka → Analytics using the existing `trace_id` field | Within the 1 GB/day log cap | P0 | Track D |
+| P1 | Metrics and traces are defined in code but not exported; Application Insights is configured with nothing sending to it; Slice 7 recorded per-event trace correlation as unverified | Implemented conditional Azure Monitor export and W3C context through outbox/Kafka in Track D. Disposable integration trace verified; actual Application Insights ingestion and one live Azure trace remain unverified. | Within the 1 GB/day log cap | P0 | Track D — local verified, Azure pending |
 | P2 | No single view for evaluators | An Azure Monitor workbook: request rate, latency, errors, replica counts per app, consumer lag, outbox age, database CPU and connections | Free | P1 | Track C |
-| P3 | Sampling not configured | Set Application Insights sampling so telemetry stays inside the daily cap under load | Free | P0 | Track D (with P1) |
+| P3 | Sampling not configured | Added configurable sampling, default 1.0 locally and recommended 0.25 in Azure pending ingestion review against the daily cap. | Free | P0 | Track D — configured, Azure pending |
 
 ### Cost optimization
 
@@ -78,7 +78,7 @@ No new gaps beyond the contract. Add to `infra/README.md`: a cost table per reso
 | A — scale-out readiness | Fixing `appsettings.json` defaults, then merge | None |
 | B — live push | Fixing throttle, then rebase and merge | None |
 | C — Azure environment | P1 discovery | S5, S6, R1, R2, R3, O2, O4, P2, and the infrastructure half of S4 |
-| D — application hardening (new) | Not started | S1, S2, S3, P1, P3; starts after B merges, to avoid a third concurrent change to `Program.cs` |
+| D — application hardening (new) | Local implementation and verification complete; Azure and signed-in browser acceptance pending | S1, S2, S3, P1, P3 |
 | F — CI/CD (new) | Not started | O1, O3; can start now, touches only `.github/**` |
 
 ## Decisions recorded

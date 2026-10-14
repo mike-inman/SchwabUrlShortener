@@ -294,15 +294,49 @@ public class ShortenerApiTests
     }
 
     [Fact]
+    public async Task Managed_rate_limit_is_partitioned_by_validated_issuer_and_subject()
+    {
+        using var factory = new TestFactory(managedLimit: 1);
+        using var first = ClientFor(factory, TenantA);
+        first.DefaultRequestHeaders.Add("X-Test-Issuer", "https://issuer.example.test/");
+        first.DefaultRequestHeaders.Add("X-Test-Subject", "subject-one");
+        Assert.Equal(HttpStatusCode.OK, (await first.GetAsync("/api/urls/managed/analytics")).StatusCode);
+        using var rejected = await first.GetAsync("/api/urls/managed/analytics");
+        Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+        Assert.True(rejected.Headers.TryGetValues("Retry-After", out _));
+        using var workspaceRejected = await first.GetAsync("/api/me/workspaces");
+        Assert.Equal(HttpStatusCode.TooManyRequests, workspaceRejected.StatusCode);
+        using var second = ClientFor(factory, TenantA);
+        second.DefaultRequestHeaders.Add("X-Test-Issuer", "https://issuer.example.test/");
+        second.DefaultRequestHeaders.Add("X-Test-Subject", "subject-two");
+        Assert.Equal(HttpStatusCode.OK, (await second.GetAsync("/api/urls/managed/analytics")).StatusCode);
+    }
+
+    [Fact]
     public async Task RealKafkaPipelineReplaysWithoutDoubleCountAndRejectsWrongTenant()
     {
+        var spans = new System.Collections.Concurrent.ConcurrentQueue<System.Diagnostics.Activity>();
+        using var traceListener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name is "Microsoft.AspNetCore" or ClickTraceContext.SourceName,
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity => spans.Enqueue(activity)
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(traceListener);
+        var expectedTraceId = System.Diagnostics.ActivityTraceId.CreateRandom();
+        var incomingTraceparent = $"00-{expectedTraceId}-{System.Diagnostics.ActivitySpanId.CreateRandom()}-01";
         var broker = Environment.GetEnvironmentVariable("Kafka__BootstrapServers")
             ?? throw new InvalidOperationException("Real Kafka broker must be provided in Kafka__BootstrapServers.");
         using var factory = new TestFactory();
         using var owner = ClientFor(factory, TenantA);
         using var publicClient = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
         Assert.Equal(HttpStatusCode.Created, (await owner.PostAsJsonAsync("/api/urls/managed", new { originalUrl = "example.com", shortCode = "pipeline1" })).StatusCode);
-        Assert.Equal(HttpStatusCode.Redirect, (await publicClient.GetAsync("/r/pipeline1")).StatusCode);
+        using (var redirectRequest = new HttpRequestMessage(HttpMethod.Get, "/r/pipeline1"))
+        {
+            redirectRequest.Headers.TryAddWithoutValidation("traceparent", incomingTraceparent);
+            Assert.Equal(HttpStatusCode.Redirect, (await publicClient.SendAsync(redirectRequest)).StatusCode);
+        }
         Assert.Equal(HttpStatusCode.Created, (await publicClient.PostAsJsonAsync("/api/urls/guest", new { originalUrl = "example.org", shortCode = "pipeline2" })).StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, (await publicClient.GetAsync("/r/pipeline2")).StatusCode);
 
@@ -333,11 +367,12 @@ public class ShortenerApiTests
         Assert.Equal(PublishOutcome.NoWork, await publisher.PublishOneAsync());
         await using var connection = new NpgsqlConnection(factory.ConnectionString);
         await connection.OpenAsync();
-        await using var row = new NpgsqlCommand("SELECT event_id, tenant_id, mapping_id, short_code, occurred_at_utc, published_at_utc IS NOT NULL FROM click_outbox", connection);
+        await using var row = new NpgsqlCommand("SELECT event_id, tenant_id, mapping_id, short_code, occurred_at_utc, published_at_utc IS NOT NULL, trace_id FROM click_outbox", connection);
         await using var reader = await row.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         var click = new ManagedClickEventV1(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3), reader.GetFieldValue<DateTimeOffset>(4), null);
         Assert.True(reader.GetBoolean(5));
+        Assert.StartsWith("00-" + expectedTraceId + "-", reader.GetString(6));
         Assert.Equal(TenantA, click.TenantId);
         await reader.DisposeAsync();
         Assert.Equal(0, (await owner.GetFromJsonAsync<ManagedUrlResponse>("/api/urls/managed/pipeline1/analytics"))!.HitCount);
@@ -345,6 +380,9 @@ public class ShortenerApiTests
         var livePublisher = new RecordingLinkChangePublisher();
         using (var consumer = new ClickKafkaConsumer(options, store, NullLogger<ClickKafkaConsumer>.Instance, livePublisher))
             Assert.Equal(ConsumeOutcome.Applied, await ConsumeUntilAsync(consumer, ConsumeOutcome.Applied));
+        var consumeSpan = Assert.Single(spans, span => span.OperationName == "click.kafka.consume" && span.TraceId == expectedTraceId);
+        Assert.Contains(spans, span => span.OperationName == "click.outbox.publish" &&
+            span.TraceId == expectedTraceId && span.SpanId == consumeSpan.ParentSpanId);
         Assert.Equal(new LinkChange(LinkChangeScope.Tenant, TenantA, "pipeline1"), Assert.Single(livePublisher.Changes));
         Assert.Equal(1, (await owner.GetFromJsonAsync<ManagedUrlResponse>("/api/urls/managed/pipeline1/analytics"))!.HitCount);
 
@@ -706,12 +744,14 @@ public class ShortenerApiTests
     {
         private readonly bool _unavailableDatabase;
         private readonly bool _unavailableRedis;
+        private readonly int? _managedLimit;
         public string ConnectionString { get; }
         public string RedisConnectionString { get; }
         public string RedisNamespace { get; }
         public AdjustableClock Clock { get; } = new();
         public TestFactory(bool resetDatabase = true, bool unavailableDatabase = false,
-            bool unavailableRedis = false, string? redisNamespace = null, string? testSchema = null)
+            bool unavailableRedis = false, string? redisNamespace = null, string? testSchema = null,
+            int? managedLimit = null)
         {
             ConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__ShortenerDb")
                 ?? throw new InvalidOperationException("Real PostgreSQL test connection must be provided in ConnectionStrings__ShortenerDb.");
@@ -731,6 +771,7 @@ public class ShortenerApiTests
             RedisNamespace = redisNamespace ?? "shortener:redirect:test:" + Guid.NewGuid().ToString("N");
             _unavailableDatabase = unavailableDatabase;
             _unavailableRedis = unavailableRedis;
+            _managedLimit = managedLimit;
             if (!resetDatabase) return;
             if (testSchema is not null) throw new InvalidOperationException("Temporary schema tests must not truncate tables.");
             using var connection = new NpgsqlConnection(ConnectionString);
@@ -744,6 +785,7 @@ public class ShortenerApiTests
             builder.UseSetting("DataProtection:ApplicationName", "Shortener.Api");
             builder.UseSetting("LiveUpdates:Mode", "Redis");
             builder.UseSetting("LiveUpdates:Channel", "shortener:links:v1");
+            if (_managedLimit is not null) builder.UseSetting("RateLimiting:Managed:PermitLimit", _managedLimit.Value.ToString());
             builder.UseSetting("ConnectionStrings:Redis", _unavailableRedis ? "127.0.0.1:1,abortConnect=false" : RedisConnectionString);
             var apiConnectionString = ConnectionString;
             if (_unavailableDatabase)
