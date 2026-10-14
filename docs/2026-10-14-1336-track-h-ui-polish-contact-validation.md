@@ -18,13 +18,33 @@ Purpose: record implementation, local checks, privacy inventory, and deployment 
 - Local Track H commit was rebased cleanly first onto Track C's `43777126736c0e999d92244700af78973c451194`, then onto the submission-package main commit `1763c1e47727d9c3c17466f376eef12092bc2b80`. The latter changed only documentation and `.gitignore` upstream; no Track H application file conflicted.
 - Fresh `schwab-trackh-check` Compose project on `10.251.50.0/24` and loopback port `18085`, with separate disposable volumes and a generated private test selector: **40/40 integration, 44/44 unit, 69/69 Web** passed. The contact integration test migrated a guarded temporary PostgreSQL schema from the prior main migration, submitted through the real API, and exercised the worker with no-op and test-only success/failure notifiers. The fresh Compose databases also applied the additive migration.
 - Live disposable HTTP: `/`, `/contact`, and `/privacy` returned 200; `/dashboard` returned 503 because this guest-only stack has no Entra sign-in. The static form POST worked without JavaScript. An under-three-second submission returned the normal confirmation without storage; a later valid submission created one PostgreSQL row, which the `Mode=None` worker marked handled. Missing antiforgery returned 400. A filled honeypot returned confirmation without storage. The sixth POST returned 429 with `Retry-After`; the row count remained one.
-- Browser screenshot capture is **not complete**: the available computer-use inventory reported no browser surface. Dashboard before/after, footer, Contact, and Privacy screenshots need a browser-enabled local session. Signed-in browser live updates and Azure email delivery remain unverified.
+- Local screenshots were captured with isolated headless Chrome profiles at 1440 px width. The before host was a published Web artifact from `1763c1e` on loopback port `18088`; the after host was the rebuilt Track H Compose Web on port `18085`. The before host used a disposable loopback Redis instance and no customer credentials. See the image table below. Signed-in dashboard screenshots remain unavailable because neither local host has Entra sign-in; both return 503 for `/dashboard`. The component tests cover the label removal and action spacing, but signed-in browser live updates and Azure email delivery remain unverified.
+
+## Local before and after screenshots
+
+| View | Before (`1763c1e`) | After (Track H) |
+| --- | --- | --- |
+| Home navigation and footer | [Home, no Contact navigation or footer](track-h-screenshots/2026-10-14-before-home-footer.png) | [Home with Contact navigation and footer](track-h-screenshots/2026-10-14-after-home-footer.png) |
+| Contact | [Route unavailable, 404](track-h-screenshots/2026-10-14-before-contact-404.png) | [Contact form and footer](track-h-screenshots/2026-10-14-after-contact.png) |
+| Privacy & Cookies | [Route unavailable, 404](track-h-screenshots/2026-10-14-before-privacy-404.png) | [Privacy page and footer](track-h-screenshots/2026-10-14-after-privacy.png) |
+| Signed-in dashboard | Not captured: Entra sign-in unavailable locally | Not captured: Entra sign-in unavailable locally |
+
+Chrome captured the rendered local pages, but this was a guest session. The screenshots do not verify the authenticated dashboard or live update transport.
 
 ## Cookies and page origins
 
-Before Track H, source inspection found the authentication cookie, ASP.NET Core antiforgery cookie, and the Container Apps affinity cookie described in the handoff. The only third-party page asset was the Google Fonts stylesheet/font requests from `fonts.googleapis.com` and `fonts.gstatic.com`. No third-party script was found.
+Before Track H, source inspection found the authentication cookie, ASP.NET Core antiforgery cookie, and the Container Apps affinity cookie described in the handoff. The only third-party page asset was the Google Fonts stylesheet/font requests from `fonts.googleapis.com` and `fonts.gstatic.com`. No third-party script was found. The live loopback inventory is:
 
-After Track H, live guest GETs on `/`, `/contact`, and `/privacy` set only `.AspNetCore.Antiforgery.*`; the parsed rendered page assets had no external origins. `/dashboard` could not be observed signed in on this guest-only stack. The test sign-in path verifies an `.AspNetCore.Cookies` authentication cookie; production Container Apps affinity remains an environment cookie to verify after deployment. The strict CSP permits self-hosted fonts. Its `form-action` may still include configured Entra origins for sign-in; these are allowed form destinations, not page asset fetches. No advertising or third-party tracking script is present in the inspected source and local guest pages.
+| Version and route | HTTP | `Set-Cookie` names | External HTML asset origins |
+| --- | --- | --- | --- |
+| Before `/` | 200 | `.AspNetCore.Antiforgery.dgKCqqqflrc` | `https://fonts.googleapis.com`, `https://fonts.gstatic.com` |
+| Before `/dashboard` | 503 | None | None (error page) |
+| Before `/contact`, `/privacy` | 404 | None | Google Fonts origins on the not-found page |
+| After `/` | 200 | `.AspNetCore.Antiforgery.dgKCqqqflrc` | None |
+| After `/dashboard` | 503 | None | None (error page) |
+| After `/contact`, `/privacy` | 200 | `.AspNetCore.Antiforgery.dgKCqqqflrc` | None |
+
+The inventory parsed `Set-Cookie` headers and rendered HTML `link`, `script`, and `img` URLs from each local route. After Track H, fonts are served from local static assets and the CSP no longer allows Google Fonts. `/dashboard` could not be observed signed in on these guest-only hosts. The test sign-in path verifies an `.AspNetCore.Cookies` authentication cookie; production Container Apps affinity remains an environment cookie to verify after deployment. The strict CSP permits self-hosted fonts. Its `form-action` may still include configured Entra origins for sign-in; these are allowed form destinations, not page asset fetches. No advertising or third-party tracking script is present in the inspected source and local guest pages.
 
 No consent banner was added because the observed/configured cookie purposes are authentication, antiforgery, and requested session affinity. The [ICO's strictly necessary exception](https://ico.org.uk/for-organisations/direct-marketing-and-privacy-and-electronic-communications/guidance-on-the-use-of-storage-and-access-technologies/what-are-the-exceptions/) covers storage essential to provide a requested service; this technical inventory should be revisited if cookies, scripts, or hosting behavior change.
 
@@ -37,7 +57,7 @@ No consent banner was added because the observed/configured cookie purposes are 
 
 ## Follow-up gates
 
-- Visual screenshots and signed-in dashboard/browser live-update check.
-- PR and CI after Michael approves a push; merge and `production` approval are separate gates. No manual deployment is part of Track H.
+- Signed-in dashboard before/after screenshots and browser live-update check.
+- Michael approved the branch push and PR on 2026-10-14; CI must be green before his separate merge decision. The gated `production` deployment remains a separate approval. No manual deployment is part of Track H.
 - Review service-to-service contact traffic capacity: the Web form enforces five per client, while the API also enforces five per source IP. When Web proxies submissions, the API can see a Web instance as one source IP and may throttle several visitors together. A trusted per-visitor partition design is needed before high-traffic production acceptance.
 - Suggested engineering-summary update: describe the contact message table, no-op/ACS notification modes, self-hosted fonts, and the local-only evidence; `docs/ENGINEERING-SUMMARY.md` was left unchanged as requested.
