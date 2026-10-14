@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore and build with warnings as errors
+        run: |
+          dotnet restore SchwabUrlShortener.slnx --nologo
+          dotnet build SchwabUrlShortener.slnx -c Release --no-restore --nologo -warnaserror
+      - name: Unit tests
+        run: dotnet test tests/Shortener.UnitTests/Shortener.UnitTests.csproj -c Release --no-build --no-restore --logger trx --results-directory TestResults/unit
+      - name: Web tests without real Redis
+        run: dotnet test tests/Shortener.WebTests/Shortener.WebTests.csproj -c Release --no-build --no-restore --filter 'FullyQualifiedName!~LiveUpdateRedisTests' --logger trx --results-directory TestResults/web
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: unit-web-trx
+          path: TestResults/**/*.trx
+          if-no-files-found: warn
+
+  integration-and-startup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Start fresh disposable Compose test profile
+        env:
+          LOCAL_PORT: '18087'
+          PUBLIC_BASE_URL: http://localhost:18087/
+        run: docker compose -p schwab-ci-${{ github.run_id }} --env-file deploy/local.env.example -f compose.yaml -f compose.local.yaml -f compose.test.yaml --profile test up --build -d --quiet-pull db redis kafka kafka-init test-migrate proxy api web analytics
+      - name: Run real PostgreSQL, Redis, and Kafka tests
+        env:
+          LOCAL_PORT: '18087'
+          PUBLIC_BASE_URL: http://localhost:18087/
+        run: docker compose -p schwab-ci-${{ github.run_id }} --env-file deploy/local.env.example -f compose.yaml -f compose.local.yaml -f compose.test.yaml --profile test run --rm --no-deps tests SchwabUrlShortener.slnx --nologo -m:1 /nodeReuse:false
+      - name: Start each host with committed settings and service endpoints
+        env:
+          LOCAL_PORT: '18087'
+          PUBLIC_BASE_URL: http://localhost:18087/
+        run: docker compose -p schwab-ci-${{ github.run_id }} --env-file deploy/local.env.example -f compose.yaml -f compose.local.yaml -f compose.test.yaml --profile test run --rm --no-deps --entrypoint /bin/sh tests -s < .github/scripts/check-host-startup.sh
+      - name: Remove only this disposable Compose project
+        if: always()
+        env:
+          LOCAL_PORT: '18087'
+          PUBLIC_BASE_URL: http://localhost:18087/
+        run: docker compose -p schwab-ci-${{ github.run_id }} --env-file deploy/local.env.example -f compose.yaml -f compose.local.yaml -f compose.test.yaml --profile test down --volumes --remove-orphans
+
+  vulnerabilities:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+      - name: Audit direct and transitive NuGet packages
+        run: |
+          dotnet restore SchwabUrlShortener.slnx --nologo
+          dotnet list SchwabUrlShortener.slnx package --vulnerable --include-transitive --format json > "$RUNNER_TEMP/nuget-audit.json"
+          python3 .github/scripts/check-vulnerabilities.py "$RUNNER_TEMP/nuget-audit.json"
+
+  bicep:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Build and lint Bicep
+        run: |
+          if [ ! -f infra/main.bicep ]; then
+            echo 'Track C Bicep is not on this commit yet.'
+            exit 0
+          fi
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+          az bicep lint --file infra/main.bicep

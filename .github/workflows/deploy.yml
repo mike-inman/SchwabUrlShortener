@@ -1,0 +1,85 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 60
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+      WEB_CLIENT_SECRET: ${{ secrets.WEB_CLIENT_SECRET }}
+      BUDGET_CONTACT_EMAIL: ${{ vars.BUDGET_CONTACT_EMAIL }}
+      API_CLIENT_ID: ${{ vars.API_CLIENT_ID }}
+      WEB_CLIENT_ID: ${{ vars.WEB_CLIENT_ID }}
+      DEPLOYMENT_PHASE: p2
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Require completed Track C application infrastructure
+        run: |
+          test -f azure.yaml && test -f infra/main.bicep && test -f infra/scripts/build-images.sh
+          if ! grep -Eq "'p2'|\"p2\"" infra/main.bicep; then
+            echo 'Track C P2 Container Apps and migration job are not yet present; deployment is blocked.' >&2
+            exit 1
+          fi
+          for value in "$PUBLIC_ORIGIN" "$AZURE_CLIENT_ID" "$AZURE_TENANT_ID" "$AZURE_SUBSCRIPTION_ID" "$POSTGRES_PASSWORD" "$REDIS_PASSWORD" "$WEB_CLIENT_SECRET" "$BUDGET_CONTACT_EMAIL" "$API_CLIENT_ID" "$WEB_CLIENT_ID"; do
+            if [ -z "$value" ]; then
+              echo 'A required deployment variable or environment secret is missing.' >&2
+              exit 1
+            fi
+          done
+      - uses: Azure/setup-azd@634ad924cf8baef2257898ba5663be8d19f15aca # v2.3.0
+        with:
+          version: 1.35.0
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign azd in with the same federated identity
+        run: azd auth login --client-id "$AZURE_CLIENT_ID" --tenant-id "$AZURE_TENANT_ID" --federated-credential-provider github
+      - name: Create ephemeral azd prod environment
+        run: |
+          azd env new prod --subscription "$AZURE_SUBSCRIPTION_ID" --location centralus --no-prompt
+          azd env set AZURE_RESOURCE_GROUP rg-schwab-url-shortener >/dev/null
+          azd env set AZURE_LOCATION centralus >/dev/null
+          azd env set DEPLOYMENT_PHASE "$DEPLOYMENT_PHASE" >/dev/null
+          azd env set POSTGRES_PASSWORD "$POSTGRES_PASSWORD" >/dev/null
+          azd env set REDIS_PASSWORD "$REDIS_PASSWORD" >/dev/null
+          azd env set WEB_CLIENT_SECRET "$WEB_CLIENT_SECRET" >/dev/null
+          azd env set BUDGET_CONTACT_EMAIL "$BUDGET_CONTACT_EMAIL" >/dev/null
+          azd env set API_CLIENT_ID "$API_CLIENT_ID" >/dev/null
+          azd env set WEB_CLIENT_ID "$WEB_CLIENT_ID" >/dev/null
+      - name: Preview Bicep changes and write safe what-if summary
+        run: |
+          azd provision --preview --no-prompt --output json > "$RUNNER_TEMP/what-if.json"
+          python3 .github/scripts/summarize-what-if.py "$RUNNER_TEMP/what-if.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Provision, build digests, and deploy
+        run: |
+          azd provision --no-prompt
+          azd deploy --all --no-prompt
+      - name: Run and verify the migration job
+        run: bash .github/scripts/run-migration-job.sh
+      - name: Smoke-test public guest flow
+        run: python3 .github/scripts/smoke-deploy.py "$PUBLIC_ORIGIN"
