@@ -10,11 +10,11 @@ Record deploy run [38626309390](https://github.com/mike-inman/SchwabUrlShortener
 - 20:02:19–20:05:39: preflight, Azure OIDC login, previous-image capture, release-image build, and migration step succeeded.
 - 20:05:39–20:17:21: the API update wait repeatedly printed `Running/pending` for revision `ca-shortener-api--0000009` and timed out after its ten-minute health window.
 - 20:17:21–20:55:59: rollback updated the previous digests but its waits likewise printed `Running/pending` for API, Analytics, and Web and eventually failed. The public smoke step was skipped.
-- Afterward: Azure showed API revision `ca-shortener-api--0000010` Running/Healthy with 100% traffic, and Analytics `--0000002` and Web `--0000008` Running/Healthy on their previous image digests. The operator reported no user impact. Queued run [38629458408](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38629458408) was cancelled.
+- Afterward: Azure showed API revision `ca-shortener-api--0000010` Running/Healthy with 100% traffic, and Analytics `--0000002` and Web `--0000008` Running/Healthy on their previous image digests. Queued run [38629458408](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38629458408) was cancelled.
 
 ## Impact and root cause
 
-No user impact was reported. The deployment and rollback jobs were falsely marked failed; application rollout and smoke validation did not complete. Azure's `az containerapp revision show` JSON places the statuses at `properties.runningState` and `properties.healthState`. For the serving revisions, the values are `Running` and `Healthy`. The old `revision list --query ... --output tsv` command emitted those values on separate lines. Bash `read -r state health <<< "$row"` consumed only the first line, leaving `health` empty. The wait therefore logged `Running/pending` until timeout even for healthy revisions.
+No user impact was observed. Application Insights request telemetry for 20:00–21:00Z showed Web 160, API 193, and Analytics 111 requests, with 0 server errors (5xx). The deployment and rollback jobs were falsely marked failed; application rollout and smoke validation did not complete. Azure's `az containerapp revision show` JSON places the statuses at `properties.runningState` and `properties.healthState`. For the serving revisions, the values are `Running` and `Healthy`. The old `revision list --query ... --output tsv` command emitted those values on separate lines. Bash `read -r state health <<< "$row"` consumed only the first line, leaving `health` empty. The wait therefore logged `Running/pending` until timeout even for healthy revisions.
 
 ## Fix and verification
 
