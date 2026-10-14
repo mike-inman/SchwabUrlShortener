@@ -18,5 +18,5 @@ public interface IUrlShortenerRepository
     Task<Guid> CaptureManagedClickAsync(string mappingId, Guid tenantId, DateTimeOffset occurredAtUtc,
         string? traceId, CancellationToken cancellationToken = default);
     Task<Guid> CaptureWorkspaceClickAsync(string mappingId, Guid workspaceId, DateTimeOffset occurredAtUtc,
-        string? traceId, CancellationToken cancellationToken = default);
+        string? traceId, ManagedClickSignal signal, CancellationToken cancellationToken = default);
 }

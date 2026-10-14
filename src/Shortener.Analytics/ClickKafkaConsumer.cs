@@ -49,6 +49,7 @@ public sealed class ClickKafkaConsumer : IDisposable
             {
                 1 => JsonSerializer.Deserialize<ManagedClickEventV1>(result.Message.Value),
                 2 => JsonSerializer.Deserialize<ManagedClickEventV2>(result.Message.Value),
+                3 => JsonSerializer.Deserialize<ManagedClickEventV3>(result.Message.Value),
                 _ => throw new InvalidClickEventException("unsupported_version")
             };
             if (click is null || !click.IsValid() || result.Message.Key != click.MappingId)

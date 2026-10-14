@@ -91,7 +91,8 @@ public sealed class CustomerBearerTests
                 ["AzureAd:TenantId"] = Tenant,
                 ["AzureAd:ClientId"] = Audience,
                 ["ConnectionStrings:ShortenerDb"] = connection,
-                ["ConnectionStrings:Redis"] = "localhost:63652,abortConnect=false"
+                ["ConnectionStrings:Redis"] = "localhost:63652,abortConnect=false",
+                ["VisitorHash:DailySecret"] = "integration-test-secret-not-a-real-value"
             }));
             builder.ConfigureServices(services => services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme,
                 options =>

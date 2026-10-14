@@ -83,7 +83,7 @@ public sealed class InMemoryUrlShortenerRepository : IUrlShortenerRepository
     }
 
     public Task<Guid> CaptureWorkspaceClickAsync(string mappingId, Guid workspaceId, DateTimeOffset occurredAtUtc,
-        string? traceId, CancellationToken cancellationToken = default)
+        string? traceId, ManagedClickSignal signal, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)

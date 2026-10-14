@@ -15,16 +15,18 @@ public sealed class UrlShortenerService : IUrlShortenerService
     private readonly IUrlShortenerRepository _repository;
     private readonly IRedirectCache _cache;
     private readonly IWorkspaceLinkAccess _workspaceAccess;
+    private readonly VisitorHashService _visitorHash;
     private readonly TimeProvider _clock;
     private readonly ILogger<UrlShortenerService> _logger;
     private static readonly TimeSpan MaximumCacheTtl = TimeSpan.FromHours(1);
 
     public UrlShortenerService(IUrlShortenerRepository repository, IRedirectCache cache, IWorkspaceLinkAccess workspaceAccess,
-        TimeProvider clock, ILogger<UrlShortenerService> logger)
+        VisitorHashService visitorHash, TimeProvider clock, ILogger<UrlShortenerService> logger)
     {
         _repository = repository;
         _cache = cache;
         _workspaceAccess = workspaceAccess;
+        _visitorHash = visitorHash;
         _clock = clock;
         _logger = logger;
     }
@@ -129,7 +131,7 @@ public sealed class UrlShortenerService : IUrlShortenerService
         throw new InvalidOperationException("Could not allocate a unique short code. Try again.");
     }
 
-    public async Task<RedirectTarget?> ResolveAsync(string shortCode, CancellationToken cancellationToken = default)
+    public async Task<RedirectTarget?> ResolveAsync(string shortCode, ClickRequestContext? requestContext = null, CancellationToken cancellationToken = default)
     {
         if (!UrlValidation.IsValidShortCode(shortCode)) return null;
         var code = shortCode.Trim();
@@ -163,16 +165,31 @@ public sealed class UrlShortenerService : IUrlShortenerService
         if (target.IsExpired(_clock.GetUtcNow())) return null;
         if (target.Mode == LinkMode.Managed)
         {
-            var eventId = target.TenantId is { } tenant
-                ? await _repository.CaptureManagedClickAsync(target.Id, tenant, _clock.GetUtcNow(),
-                    Activity.Current?.IdFormat == ActivityIdFormat.W3C ? Activity.Current.Id : null, cancellationToken)
-                : await _repository.CaptureWorkspaceClickAsync(target.Id, target.OwnerWorkspaceId!.Value, _clock.GetUtcNow(),
-                    Activity.Current?.IdFormat == ActivityIdFormat.W3C ? Activity.Current.Id : null, cancellationToken);
+            var now = _clock.GetUtcNow();
+            var correlationId = Activity.Current?.IdFormat == ActivityIdFormat.W3C ? Activity.Current.Id : null;
+            Guid eventId;
+            if (target.TenantId is { } tenant)
+                eventId = await _repository.CaptureManagedClickAsync(target.Id, tenant, now, correlationId, cancellationToken);
+            else
+            {
+                var signal = BuildClickSignal(requestContext ?? ClickRequestContext.Empty, target.Id, now);
+                eventId = await _repository.CaptureWorkspaceClickAsync(target.Id, target.OwnerWorkspaceId!.Value, now, correlationId, signal, cancellationToken);
+            }
             CapturedClicks.Add(1);
             _logger.LogInformation("Managed click captured. EventId={EventId} MappingId={MappingId} CorrelationId={CorrelationId}",
                 eventId, target.Id, Activity.Current?.Id);
         }
         return target;
+    }
+
+    private ManagedClickSignal BuildClickSignal(ClickRequestContext context, string mappingId, DateTimeOffset nowUtc)
+    {
+        var device = UserAgentClassifier.Classify(context.UserAgent);
+        var referrer = ReferrerClassifier.Classify(context.Referer);
+        var language = AcceptLanguageParser.ParsePrimary(context.AcceptLanguage);
+        var visitorHash = _visitorHash.Compute(context.RemoteIp, context.UserAgent, mappingId, DateOnly.FromDateTime(nowUtc.UtcDateTime));
+        return new ManagedClickSignal(visitorHash, referrer.ReferrerGroup, referrer.ReferrerHost,
+            device.DeviceClass, device.OsFamily, device.BrowserFamily, language, device.IsBot);
     }
 
     private async Task TryPopulateCacheAsync(RedirectTarget target, CancellationToken cancellationToken)
