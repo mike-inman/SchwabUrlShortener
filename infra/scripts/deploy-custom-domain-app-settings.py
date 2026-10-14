@@ -33,6 +33,7 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--what-if', action='store_true')
     mode.add_argument('--apply', action='store_true')
+    parser.add_argument('--stage', choices=('allowed-hosts', 'public-links'), required=True)
     args = parser.parse_args()
     if json.loads(run(['az', 'account', 'show', '-o', 'json']))['id'] != SUBSCRIPTION:
         raise RuntimeError('default Azure CLI profile is not on the approved subscription')
@@ -51,11 +52,15 @@ def main():
         if not {'AllowedHosts', 'PublicLinks__BaseUrl'} <= indexed.keys():
             raise RuntimeError(f'{name} lacks existing host configuration')
         allowed = indexed['AllowedHosts']['value'].split(';')
-        for host in (ROUTE_HOST, HOST, 'www.' + HOST):
-            if host not in allowed:
-                allowed.append(host)
-        indexed['AllowedHosts']['value'] = ';'.join(allowed)
-        indexed['PublicLinks__BaseUrl']['value'] = 'https://' + HOST + '/'
+        if args.stage == 'allowed-hosts':
+            for host in (ROUTE_HOST, HOST, 'www.' + HOST):
+                if host not in allowed:
+                    allowed.append(host)
+            indexed['AllowedHosts']['value'] = ';'.join(allowed)
+        else:
+            if HOST not in allowed or 'www.' + HOST not in allowed:
+                raise RuntimeError(f'{name} must allow both custom hosts before changing public links')
+            indexed['PublicLinks__BaseUrl']['value'] = 'https://' + HOST + '/'
         resources.append({'type': 'Microsoft.App/containerApps', 'apiVersion': '2024-03-01',
                           'name': name, 'location': live['location'], 'tags': live['tags'],
                           'identity': clean(live['identity']), 'properties': p})
@@ -66,7 +71,7 @@ def main():
         path.write_text(json.dumps(template))
         command = ['az', 'deployment', 'group', 'what-if' if args.what_if else 'create',
                    '-g', GROUP, '--subscription', SUBSCRIPTION,
-                   '--name', 'shortener-domain-apps-20261013', '--template-file', str(path), '-o', 'json']
+                   '--name', 'shortener-domain-' + args.stage + '-20261014', '--template-file', str(path), '-o', 'json']
         if args.what_if:
             command.append('--no-pretty-print')
         result = json.loads(run(command))
@@ -77,7 +82,7 @@ def main():
                       [(d['path'], d['propertyChangeType']) for d in item.get('delta') or []
                        if d['propertyChangeType'] != 'NoEffect'])
     else:
-        print('Focused custom-domain app settings deployment completed.')
+        print('Focused custom-domain ' + args.stage + ' deployment completed.')
 
 
 if __name__ == '__main__':

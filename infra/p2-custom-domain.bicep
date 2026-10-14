@@ -30,7 +30,7 @@ resource route 'Microsoft.App/managedEnvironments/httpRouteConfigs@2024-10-02-pr
 
 resource apexCertificate 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' = {
   parent: environment
-  name: 'mc-ziplio-apex-http'
+  name: 'mc-ziplio-apex'
   location: resourceGroup().location
   tags: tags
   properties: {
@@ -42,7 +42,7 @@ resource apexCertificate 'Microsoft.App/managedEnvironments/managedCertificates@
 
 resource wwwCertificate 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' = {
   parent: environment
-  name: 'mc-ziplio-www-http'
+  name: 'mc-ziplio-www'
   location: resourceGroup().location
   tags: tags
   properties: {
