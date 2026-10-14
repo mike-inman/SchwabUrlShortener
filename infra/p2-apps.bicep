@@ -106,12 +106,14 @@ resource redis 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
+// ACA ingress reaches containers from its reserved 100.100.0.0/17 range;
+// keep the VNet range for in-environment callers (Azure custom VNet documentation).
 var apiScaleEnv = enableScaleOutSettings ? [
   { name: 'DataProtection__Mode', value: 'AzureBlob' }
   { name: 'DataProtection__ApplicationName', value: 'Shortener.Api' }
   { name: 'DataProtection__BlobUri', value: '${dpBlobBase}api-keys.xml' }
   { name: 'DataProtection__KeyVaultKeyId', value: '${dpKeyBase}dataprotection-api' }
-  { name: 'ForwardedHeaders__KnownNetworks', value: '10.60.0.0/23' }
+  { name: 'ForwardedHeaders__KnownNetworks', value: '10.60.0.0/23,100.100.0.0/17' }
   { name: 'ForwardedHeaders__ForwardLimit', value: '1' }
   { name: 'LiveUpdates__Mode', value: 'Redis' }
   { name: 'LiveUpdates__Channel', value: 'shortener:links:v1' }
@@ -150,8 +152,8 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
         ], apiScaleEnv, appInsightsEnv)
         resources: { cpu: json('0.25'), memory: '0.5Gi' }
         probes: [
-          { type: 'Liveness', httpGet: { path: '/health/live', port: 8080 }, initialDelaySeconds: 10, periodSeconds: 15 }
-          { type: 'Readiness', httpGet: { path: '/health/ready', port: 8080 }, initialDelaySeconds: 15, periodSeconds: 15 }
+          { type: 'Liveness', httpGet: { path: '/health/live', port: 8080, httpHeaders: [ { name: 'Host', value: 'ca-shortener-api.${environment.properties.defaultDomain}' } ] }, initialDelaySeconds: 10, periodSeconds: 15 }
+          { type: 'Readiness', httpGet: { path: '/health/ready', port: 8080, httpHeaders: [ { name: 'Host', value: 'ca-shortener-api.${environment.properties.defaultDomain}' } ] }, initialDelaySeconds: 15, periodSeconds: 15 }
         ]
       } ]
       scale: { minReplicas: 1, maxReplicas: 5, rules: [ { name: 'http-concurrency', http: { metadata: { concurrentRequests: '10' } } } ] }
@@ -166,7 +168,7 @@ var webScaleEnv = enableScaleOutSettings ? [
   { name: 'DataProtection__KeyVaultKeyId', value: '${dpKeyBase}dataprotection-web' }
   { name: 'TokenCache__Mode', value: 'Distributed' }
   { name: 'TokenCache__InstanceName', value: 'shortener:web:tokens:' }
-  { name: 'ForwardedHeaders__KnownNetworks', value: '10.60.0.0/23' }
+  { name: 'ForwardedHeaders__KnownNetworks', value: '10.60.0.0/23,100.100.0.0/17' }
   { name: 'ForwardedHeaders__ForwardLimit', value: '1' }
   { name: 'LiveUpdates__Mode', value: 'Redis' }
   { name: 'LiveUpdates__Channel', value: 'shortener:links:v1' }
@@ -208,8 +210,8 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
         ], webScaleEnv, appInsightsEnv)
         resources: { cpu: json('0.25'), memory: '0.5Gi' }
         probes: [
-          { type: 'Liveness', httpGet: { path: '/health/live', port: 8080 }, initialDelaySeconds: 10, periodSeconds: 15 }
-          { type: 'Readiness', httpGet: { path: '/health/ready', port: 8080 }, initialDelaySeconds: 15, periodSeconds: 15 }
+          { type: 'Liveness', httpGet: { path: '/health/live', port: 8080, httpHeaders: [ { name: 'Host', value: 'ca-shortener-web.${environment.properties.defaultDomain}' } ] }, initialDelaySeconds: 10, periodSeconds: 15 }
+          { type: 'Readiness', httpGet: { path: '/health/ready', port: 8080, httpHeaders: [ { name: 'Host', value: 'ca-shortener-web.${environment.properties.defaultDomain}' } ] }, initialDelaySeconds: 15, periodSeconds: 15 }
         ]
       } ]
       scale: { minReplicas: 1, maxReplicas: 3, rules: [ { name: 'http-concurrency', http: { metadata: { concurrentRequests: '10' } } } ] }
