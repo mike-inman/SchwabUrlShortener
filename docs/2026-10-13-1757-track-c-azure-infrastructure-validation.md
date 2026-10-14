@@ -204,3 +204,7 @@ P2 deployment is blocked until Azure permits a new Container Apps environment in
 ## P2 real-image preview and migration gate — 2026-10-13 22:25 CDT
 
 See [the dated migration extension review](2026-10-13-2225-track-c-p2-migration-extension-review.md) for exact ACR digest verification, the provider-backed eight-Create what-if, approved deployment result, and the failed first migration execution. The sole proposed correction is a focused one-Modify what-if for PostgreSQL `azure.extensions=citext`; it has not been deployed. P2 public and runtime checks remain gated on migration exit 0.
+
+## Entra as code addendum — 2026-10-13 23:07 CDT
+
+The [dated Entra reconciliation validation](2026-10-13-2307-track-c-entra-reconciliation-validation.md) records the committed configuration, first no-op live Graph dry run, simulated custom-domain additions, optional federated-credential preview, and remaining domain/credential gates. No Entra mutation or P3 work was performed in this addendum slice.

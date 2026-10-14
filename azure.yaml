@@ -14,6 +14,11 @@ services:
     host: containerapp
     image: ${SERVICE_ANALYTICS_IMAGE}
 hooks:
+  postprovision:
+    shell: sh
+    run: ./infra/scripts/configure-entra.sh --apply
+    interactive: false
+    continueOnError: false
   predeploy:
     shell: sh
     run: ./infra/scripts/build-images.sh

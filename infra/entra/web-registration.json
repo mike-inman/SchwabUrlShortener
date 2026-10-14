@@ -1,0 +1,16 @@
+{
+  "applicationClientId": "d4cd63a0-5583-41ad-a640-803ea76bb3a8",
+  "localRedirectUris": [
+    "https://localhost:7130/signin-oidc"
+  ],
+  "callbackPaths": [
+    "/signin-oidc",
+    "/signout-callback-oidc"
+  ],
+  "federatedCredential": {
+    "name": "shortener-web-managed-identity",
+    "issuer": "https://login.microsoftonline.com/eea269ab-1571-48a5-a18c-824ba5859cd5/v2.0",
+    "audiences": ["api://AzureADTokenExchange"],
+    "managedIdentityName": "id-shortener-web"
+  }
+}
