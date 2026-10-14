@@ -1,8 +1,24 @@
 # Schwab URL Shortener Prototype
 
-Updated: 2026-10-13 19:38 CDT
+[![CI](https://github.com/mike-inman/SchwabUrlShortener/actions/workflows/ci.yml/badge.svg)](https://github.com/mike-inman/SchwabUrlShortener/actions/workflows/ci.yml)
+
+Updated: 2026-10-14 09:24 CDT
 
 This repository contains a .NET 10 URL shortener prototype. Anonymous guest links expire after seven days. Workforce managed links use the validated token's tenant; customer managed links use application workspaces and memberships. PostgreSQL stores links, managed click outbox events, and aggregate counts. Redis caches public redirect mappings. Kafka carries managed click events to the Analytics worker. A Blazor Server app provides guest creation and a signed-in managed dashboard.
+
+## Deployment pipeline
+
+```mermaid
+flowchart LR
+  A[PR or main push] --> B[CI gates]
+  B -->|successful main push| C[Production approval]
+  C --> D[OIDC login and ACR digest builds]
+  D --> E[Migration and healthy app revisions]
+  E --> F[Public smoke checks]
+  F -->|failure after update| G[Restore prior image digests]
+```
+
+CI checks the .NET build and tests, disposable PostgreSQL/Redis/Kafka integration and startup, NuGet advisories, Bicep, CodeQL, PR dependency changes, full Git history with gitleaks, and fixable High/Critical vulnerabilities in all three container images. Deployment only follows a successful CI run for a `main` push, or an explicit manual dispatch on `main`, and waits for the `production` environment reviewer. It builds the API, Analytics, and Web images in ACR and deploys their immutable digests. If an update or public smoke check fails, the workflow restores the previous application and migration job images; database migrations are not reversed and must remain backward-compatible. Infrastructure and Entra changes are operator-applied separately. See the [CI/CD runbook](docs/runbooks/ci-cd.md) for setup, approval, and recovery. The production gate is pending repository publication and operator configuration.
 
 ## Architecture
 
