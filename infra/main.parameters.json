@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "${AZURE_LOCATION}" },
+    "postgresPassword": { "value": "${POSTGRES_PASSWORD}" },
+    "redisPassword": { "value": "${REDIS_PASSWORD}" },
+    "webClientSecret": { "value": "${WEB_CLIENT_SECRET}" },
+    "budgetContactEmail": { "value": "${BUDGET_CONTACT_EMAIL}" },
+    "operatorPublicIp": { "value": "${OPERATOR_PUBLIC_IP}" },
+    "deploymentPhase": { "value": "${DEPLOYMENT_PHASE}" }
+  }
+}

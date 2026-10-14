@@ -88,3 +88,7 @@ No new gaps beyond the contract. Add to `infra/README.md`: a cost table per reso
 - Defender for Cloud: foundational CSPM only (free). Paid Defender plans are a production step.
 - WAF: production step (needs Front Door Premium).
 - Rate limits: initial values are set by Track D from expected low load and recorded; they are configuration, not code constants.
+
+## S4 progress — 2026-10-13 23:07 CDT
+
+The Track C Entra-as-code script now previews one federated credential for `id-shortener-web` on the existing multitenant Web registration. It has not applied that Graph change. Web still uses the Key Vault client secret; S4 remains open until managed-identity-backed sign-in is verified and the running revision no longer references the secret. See [the dated Entra validation](2026-10-13-2307-track-c-entra-reconciliation-validation.md).

@@ -1,0 +1,11 @@
+{
+  "applicationClientId": "93f2f816-0a95-41e0-b7df-7ca3c0cce8a0",
+  "localRedirectUris": [
+    "https://localhost:63656/signin-oidc",
+    "https://localhost:63656/signout-callback-oidc"
+  ],
+  "callbackPaths": [
+    "/signin-oidc",
+    "/signout-callback-oidc"
+  ]
+}
