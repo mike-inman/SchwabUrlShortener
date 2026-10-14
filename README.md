@@ -16,6 +16,12 @@ A production-minded URL shortener built in .NET 10 for the Charles Schwab *AI-Pr
 - **Live dashboard:** counts and charts update in the browser without polling or refreshing, using Redis pub/sub and the existing Blazor connection.
 - **Fast redirects:** `GET /r/{code}` is served from a Redis cache, with PostgreSQL as the source of truth.
 
+## Screenshots
+
+| Signed-in dashboard | Link Insights |
+| --- | --- |
+| ![Managed links dashboard](docs/images/dashboard.png) | ![Insights page with charts](docs/images/insights.png) |
+
 ## Try it
 
 ### On the live site
