@@ -1,125 +1,94 @@
-# Schwab URL Shortener Prototype
+# Ziplio — URL Shortener
 
-[![CI](https://github.com/mike-inman/SchwabUrlShortener/actions/workflows/ci.yml/badge.svg)](https://github.com/mike-inman/SchwabUrlShortener/actions/workflows/ci.yml)
+[![CI](https://github.com/mike-inman/SchwabUrlShortener/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mike-inman/SchwabUrlShortener/actions/workflows/ci.yml)
 
-Updated: 2026-10-14 09:36 CDT
+**Live:** <https://ziplio.io> · **[Engineering Summary](docs/ENGINEERING-SUMMARY.md)** · **[Architecture Addendum](docs/ARCHITECTURE-ADDENDUM.md)** · **[Roadmap](docs/ROADMAP.md)**
 
-This repository contains a .NET 10 URL shortener prototype. Anonymous guest links expire after seven days. Workforce managed links use the validated token's tenant; customer managed links use application workspaces and memberships. PostgreSQL stores links, managed click outbox events, and aggregate counts. Redis caches public redirect mappings. Kafka carries managed click events to the Analytics worker. A Blazor Server app provides guest creation and a signed-in managed dashboard.
+A production-minded URL shortener built in .NET 10 for the Charles Schwab *AI-Proficient Software Engineer* assignment. The repository and solution are named `SchwabUrlShortener`; the product is **Ziplio**.
 
-## Deployment pipeline
+> **Reviewers:** start with the [Engineering Summary](docs/ENGINEERING-SUMMARY.md). It maps every assignment requirement and deliverable to evidence, including how AI was used, controlled and validated.
+
+## What it does
+
+- **Guest links:** shorten any `http(s)` URL without an account. Guest links expire after 7 days and record no analytics.
+- **Managed links:** sign in with a Ziplio account (Microsoft Entra External ID). Links belong to a workspace and are permanent.
+- **Analytics:** clicks on managed links are counted through a transactional outbox and Kafka (Azure Event Hubs in the cloud). A per-link Insights page shows bot-excluded clicks over time, estimated unique visitors, busiest hours, top referrers and devices. Visitors are counted with a privacy-preserving daily hash; raw IPs and user agents are never stored.
+- **Live dashboard:** counts and charts update in the browser without polling or refreshing, using Redis pub/sub and the existing Blazor connection.
+- **Fast redirects:** `GET /r/{code}` is served from a Redis cache, with PostgreSQL as the source of truth.
+
+## Try it
+
+### On the live site
+
+Open <https://ziplio.io>, paste a URL and select **Create guest link**. To see managed links, analytics and live updates, select **Sign in** and create an account.
+
+### Locally, with Docker
+
+You need Docker (with Compose v2) and Git. The .NET SDK isn't required.
+
+```sh
+cp deploy/local.env.example deploy/local.env     # then set POSTGRES_PASSWORD to any long random value
+docker compose --env-file deploy/local.env -f compose.yaml -f compose.local.yaml up --build -d
+curl -s http://localhost:8080/health/ready        # wait for "Healthy" (the first build takes a few minutes)
+```
+
+Open <http://localhost:8080> and create a guest link. Sign-in is disabled locally until you register your own Entra External ID application, so local runs are guest-only; managed features are available on the live site.
+
+Stop with `docker compose --env-file deploy/local.env -f compose.yaml -f compose.local.yaml down --volumes`.
+
+Full instructions (running from the Git bundle, the API with `curl`, troubleshooting) are in [Engineering Summary §9](docs/ENGINEERING-SUMMARY.md#9-setup-instructions).
+
+### Run the tests
+
+```sh
+docker compose -p ziplio-tests --env-file deploy/local.env \
+  -f compose.yaml -f compose.local.yaml -f compose.test.yaml --profile test up --build --exit-code-from tests tests
+docker compose -p ziplio-tests -f compose.yaml -f compose.local.yaml -f compose.test.yaml down --volumes
+```
+
+This runs the unit, Web and integration suites against real PostgreSQL, Redis and Kafka in a disposable project. The integration tests run only against a database named `Schwab_test_local`.
+
+## Architecture at a glance
 
 ```mermaid
 flowchart LR
-  A[PR or main push] --> B[CI gates]
-  B -->|successful main push| C[Production approval]
-  C --> D[OIDC login and ACR digest builds]
-  D --> E[Migration and healthy app revisions]
-  E --> F[Public smoke checks]
-  F -->|failure after update| G[Restore prior image digests]
+  browser[Browser] --> route{{HTTPS route<br/>ziplio.io}}
+  route -->|/r, /api, /health| api[API]
+  route -->|/| web[Web<br/>Blazor Server]
+  web --> api
+  api --> pg[(PostgreSQL)]
+  api <--> redis[(Redis)]
+  web <--> redis
+  worker[Analytics worker] --> pg
+  worker <--> bus[[Kafka /<br/>Event Hubs]]
+  worker --> redis
 ```
 
-CI checks the .NET build and tests, disposable PostgreSQL/Redis/Kafka integration and startup, NuGet advisories, Bicep, CodeQL, PR dependency changes, full Git history with gitleaks, and fixable High/Critical vulnerabilities in all three container images. Deployment only follows a successful CI run for a `main` push, or an explicit manual dispatch on `main`, and waits for the `production` environment reviewer. It builds the API, Analytics, and Web images in ACR and deploys their immutable digests. If an update or public smoke check fails, the workflow restores the previous application and migration job images; database migrations are not reversed and must remain backward-compatible. Infrastructure and Entra changes are operator-applied separately. See the [CI/CD runbook](docs/runbooks/ci-cd.md) for setup, approval, and recovery. The production gate is pending repository publication and operator configuration.
+On Azure it runs on Container Apps (autoscaling API 1→5, Web 1→3, Analytics 1→4 on Kafka lag), with private PostgreSQL, Key Vault, one managed identity per service, and everything defined in Bicep. Details are in the [Architecture Addendum](docs/ARCHITECTURE-ADDENDUM.md).
 
-## Architecture
+## Repository layout
 
-- Domain: `src/Shortener.Domain` — `UrlMapping`, validation helpers, and business rules.
-- Application: `src/Shortener.Application` — guest/managed creation, public resolution, and tenant-scoped management contracts.
-- Infrastructure: `src/Shortener.Infrastructure` — PostgreSQL repository, explicit EF Core migrations, database constraints, durable managed click capture, and disposable Redis redirect cache.
-- API: `src/Shortener.Api` — anonymous guest and redirect routes plus authenticated managed routes.
-- Analytics: `src/Shortener.Analytics` — PostgreSQL outbox publisher, Kafka consumer, deduplication, and tenant-aware aggregate updates.
-- Web: `src/Shortener.Web` — Interactive Server UI that acquires delegated API tokens on the server and calls the API over HTTP.
-- Tests: `tests/Shortener.UnitTests`, `tests/Shortener.IntegrationTests`, and `tests/Shortener.WebTests` — domain, real PostgreSQL/API, and Web regression coverage.
+| Path | Contents |
+| --- | --- |
+| `src/Shortener.Domain` | Entities and rules: URL and code validation, expiry |
+| `src/Shortener.Application` | Use cases and ports |
+| `src/Shortener.Infrastructure` | EF Core and PostgreSQL, Redis, outbox, migrations |
+| `src/Shortener.Api` | Minimal API: create, redirect, managed reads and analytics, health |
+| `src/Shortener.Web` | Blazor Server UI: guest form, dashboard, Insights |
+| `src/Shortener.Analytics` | Outbox publisher, Kafka consumer, aggregation |
+| `tests/` | Unit, Web (bUnit) and integration tests |
+| `infra/` | Bicep, azd and Entra configuration for Azure |
+| `.github/` | CI (build, tests, vulnerability, secret and image scans) and gated deploy |
+| `compose*.yaml`, `deploy/` | Local, scale-out, cloud-VM and test Compose layouts |
+| `docs/` | Engineering summary, architecture, runbooks, and dated plans, handoffs and validations |
 
-## Ziplio Insights (2026-10-14)
+## Documentation
 
-For customer workspace links, the signed-in dashboard links to `/dashboard/links/{shortCode}/insights`. Insights shows bot-excluded clicks over time, change from the previous equal period, estimated daily unique visitors, local-time busiest hour and heatmap, last click, top referrers, device share, and a batched seven-day sparkline per dashboard row. The page updates from the existing workspace live signal. Workforce links do not have this page.
-
-The API reduces the request IP and user agent to a daily HMAC visitor hash, and reduces referrers to a coarse group and host bucket. Raw IPs, full user agents, full referrer URLs, cookies, and client-side tracking are not stored or published for Insights. Hashes are removed after 35 days. Redirect totals may exceed Insights clicks because the redirect counter includes bots. Set `VisitorHash__DailySecret` to at least 32 random bytes in the API's private production configuration; the API refuses to start without it outside Development. The Development file has an obvious non-production value. Apply the `LinkInsightsCollection` migration before starting an API image that captures V3 clicks. See the [Track G ADR](docs/2026-10-13-1500-link-insights-collection-adr.md) for the event and endpoint contract.
-
-## Setup
-
-1. Restore .NET dependencies:
-   `dotnet restore`
-2. Provide `ConnectionStrings__ShortenerDb` through your environment or local secret store. It must point to a PostgreSQL database; no connection string is checked in. The database role applying migrations needs permission to create the `citext` extension and schema objects.
-3. Apply checked-in migrations explicitly before starting the API:
-   `dotnet ef database update --project src/Shortener.Infrastructure/Shortener.Infrastructure.csproj --startup-project src/Shortener.Infrastructure/Shortener.Infrastructure.csproj --context ShortenerDbContext`
-   Repeating this command applies only pending migrations. API startup never changes the schema.
-4. Configure `AzureAd__ClientId` with the API app registration's client ID. `AzureAd:TenantId` defaults to `organizations` for Entra work/school tenants. The API fails closed at startup if either the client ID or PostgreSQL connection string is missing. Managed routes require a delegated API access token with `access_as_user`; an ID token is insufficient.
-5. Provide `ConnectionStrings__Redis` through the environment or local secret store, pointing to a Redis instance accessible by API, Web, and Analytics. For a disposable loopback-only local instance, use a separate Redis container/port; do not reuse another project's Redis data. The optional `RedirectCache__Namespace` sets a safe ASCII key prefix; the default is `shortener:redirect:v1`. All three hosts default to `LiveUpdates__Mode=Redis`, `LiveUpdates__Channel=shortener:links:v1`, and `LiveUpdates__DebounceMilliseconds=1000` in `appsettings.json`. The Web dashboard listens on that channel and fetches authorized data only after a matching hint. No Redis credential belongs in tracked settings.
-6. Run `dotnet run --project src/Shortener.Api/Shortener.Api.csproj`. `GET /health/live` reports process liveness; `GET /health/ready` checks PostgreSQL access/migrations and Redis availability, returning 503 when a dependency is unavailable. Redis outage still allows redirects through PostgreSQL, while readiness reports the degraded dependency.
-7. Create a Kafka topic for managed clicks and set `Kafka__BootstrapServers`, `Kafka__Topic`, and `Kafka__ConsumerGroup` for the Analytics worker. Configure the same `ConnectionStrings__ShortenerDb` as the API, then run `dotnet run --project src/Shortener.Analytics/Shortener.Analytics.csproj`. The worker needs the Slice 5 migration before startup. A managed redirect commits an outbox row before returning 302; its analytics count updates after Kafka processing. If PostgreSQL capture fails, that redirect returns an error. Kafka downtime leaves the outbox queued for bounded retries; terminal rows require operator inspection and replay.
-8. HTTP contract:
-   - `POST /api/urls/guest` with `{ "originalUrl": "https://example.com/articles/123", "shortCode": "demo1" }` creates an anonymous link with `expiresAtUtc` exactly seven days after creation. `shortCode` is optional.
-   - `POST /api/urls/managed` accepts the same body and requires a valid Entra bearer access token. Tenant ownership comes from the validated token's `tid` claim.
-   - `GET /r/{shortCode}` anonymously redirects active guest or managed links. Expired guest links return 404.
-   - `GET /api/urls/managed/{shortCode}` and `GET /api/urls/managed/{shortCode}/analytics` require authentication and return only the caller's tenant-owned link.
-   - `GET /api/urls/managed/analytics` returns only the caller's tenant-owned links. Guest links have no management or analytics surface.
-
-Create responses contain a relative `shortUrl` such as `/r/demo1`; the serving domain is chosen by deployment. Short codes are unique across both link modes.
-
-For the Web app, configure `ShortenerApi:BaseUrl` with the server-to-server API origin and `PublicLinks:BaseUrl` with the public origin used in generated links. The latter must be HTTPS or loopback HTTP and must end at the origin root. Non-loopback HTTP for the internal API requires an exact DNS host in `ShortenerApi:AllowedInternalHttpHosts`; use it only on a private container network. Configure `ShortenerApi:Scope` with the API's delegated scope. Configure `AzureAd:Instance`, `AzureAd:TenantId`, `AzureAd:ClientId`, and `AzureAd:ClientSecret` for the Web app registration in its separate local secret store or environment. Local `dotnet run --project src/Shortener.Web/Shortener.Web.csproj` now needs reachable Redis for its live update subscription. With the existing local Compose Redis container published on loopback, set `ConnectionStrings__Redis=127.0.0.1:63652,abortConnect=false` in the Web process environment. The Web app keeps tokens and the client secret on the server. Guest creation remains available without Web sign-in configuration. The app registration must allow the Web callback URL used locally.
-
-For a portable Docker installation or a single-server custom-domain deployment, use the dated [deployment guide](docs/2026-10-13-1239-portable-local-and-custom-domain-deployment.md). It provides private sample environment files, explicit migrations, public proxy routes, and verification commands. Existing local `.env` files are not used or changed by that workflow.
-
-The [Slice 6 validation record](docs/2026-10-13-1310-slice-6-compose-observability-validation.md) separates the real local Compose results from live Entra and cloud acceptance. Its disposable test profile runs the guarded full solution suite against real PostgreSQL, Redis, and Kafka.
-
-The [2026-10-13 Slice 7 scale validation closeout](docs/2026-10-13-1441-slice-7-scale-validation-closeout.md) records an isolated 83/83 full-suite run with real PostgreSQL, Redis, and Kafka for the integration tests, a capped loopback load sample, and bounded dependency interruption and recovery checks. Use `scripts/load-local.py` only with a fresh disposable local Compose project and `--local-test-only`; it caps each case at 500 requests and concurrency at 8. The sample is a local baseline, not a production capacity target or live identity check. Acceptance still needs an agreed traffic profile, latency/error/availability objectives, analytics freshness and retention, recovery requirements, and deployment environment.
-
-### Scale-out settings (2026-10-13)
-
-API and Web default to `DataProtection__Mode=Filesystem` in `appsettings.json`, with application names `Shortener.Api` and `Shortener.Web`. Web defaults to `TokenCache__Mode=InMemory`. Environment variables override these defaults: local Compose mounts the existing named key volumes at `/home/app/.aspnet/DataProtection-Keys` and sets Web to `Distributed` with `TokenCache__InstanceName=shortener:web:tokens:` and `ConnectionStrings__Redis`. The API, Web, and Analytics containers run as the .NET image's non-root `app` user. Set `DataProtection__Mode=AzureBlob`, `DataProtection__BlobUri`, and `DataProtection__KeyVaultKeyId` for Azure. The distributed MSAL token cache encrypts entries using the shared Data Protection key ring. Existing root-owned key files may need a one-time ownership change before the first non-root start; back up the named volume, then use a temporary container from the same image as root to `chown -R "$(id -u app):$(id -g app)" /keys` on the mounted volume. Keep the volume and its keys; do not recreate it.
-
-Rate limits default to 10 guest creations per minute per client, 120 redirect requests per minute with a burst of 60, and 120 managed requests per minute per validated user. The guest Web form submits as a server-rendered HTTP POST so its per-client policy also covers normal browser use. Override the `RateLimiting__*` settings in the relevant host to adjust them. For the single-client scale demonstration, raise `RateLimiting__Redirect__TokenLimit` and `RateLimiting__Redirect__TokensPerPeriod` in the disposable demo stack, then restore the defaults. Rejections return 429 with `Retry-After`. `PublicLinks__BaseUrl` supplies the apex host for the application-level `www` to HTTPS apex redirect; local HTTP loopback remains supported for development. API and Web add security headers; Web's CSP allows the Blazor WebSocket and the configured Entra authority form origin. When `APPLICATIONINSIGHTS_CONNECTION_STRING` is set, all three hosts export OpenTelemetry to Azure Monitor. `OpenTelemetry__SamplingRatio` defaults to `1.0` locally; use `0.25` in Azure initially and review ingestion against the 1 GB/day cap. Without a connection string there is no exporter. The dated [Track D validation record](docs/2026-10-14-0825-track-d-application-hardening-validation.md) records the exact checks and remaining live verification.
-
-`ForwardedHeaders__KnownProxyHost` remains the local proxy setting. Alternatively, set `ForwardedHeaders__KnownNetworks` to comma-separated CIDRs and `ForwardedHeaders__ForwardLimit` to the number of trusted hops (default `1`). Do not set both trust sources. Analytics accepts `Kafka__SecurityProtocol` (`Plaintext` or `SaslSsl`), `Kafka__SaslMechanism`, `Kafka__SaslUsername`, `Kafka__SaslPassword`, and `Kafka__EnableIdempotence` (default `true`). `SaslSsl` requires all three SASL values. Supply passwords through private configuration only.
-
-Analytics serves `GET /health/live` and `GET /health/ready` on port `8080`; readiness checks PostgreSQL and Kafka topic metadata. The `--healthcheck` command remains available. For a disposable two API and two Web replica stack, add `-f compose.scaleout.yaml` after `-f compose.local.yaml`; it uses `deploy/Caddyfile.scaleout` for API round robin and sticky Web routing. Use a fresh Compose project and the documented loopback and network overrides.
-
-## Existing local Docker Compose bundle
-
-The checked-in `compose.existing.yaml` preserves the earlier local bundle and its external volume names. Use it for an existing installation; the portable `compose.yaml` has different service and volume names and must not be pointed at existing data. The existing bundle groups PostgreSQL, Redis, Kafka, API, Web, and Analytics under `schwab-url-shortener`. It uses a configurable Schwab-only subnet (`SCHWAB_SUBNET`, default `10.251.53.0/24`) for service-name DNS; inspect existing Docker networks and host routes before using that default on another machine. Host ports remain loopback-only: PostgreSQL `63651`, Redis `63652`, Kafka `63653`, API `63654`, Web HTTP `63655`, and optional Web HTTPS `63656`. Kafka advertises `localhost:63653` to host clients and `kafka:9092` to app containers.
-
-1. Copy the six `docker/*.env.example` files to private files outside the repository, set mode `0600`, and replace placeholders with your own credentials and absolute paths. `compose.env` supplies the existing volume names and path to the PostgreSQL password environment file; `apps.env` supplies the paths to separate API, Web, and Analytics environment files. Existing installations must keep their original volume identifiers and PostgreSQL password. Never commit these files. The Web needs `ShortenerApi__BaseUrl`, `ShortenerApi__AllowedInternalHttpHosts=api`, and `PublicLinks__BaseUrl` for guest links and readiness; set the public origin to `http://localhost:63655/` for local HTTP or `https://localhost:63656/` for the optional HTTPS endpoint. Managed sign-in requires all real Web Entra settings and a registered delegated API scope. The API always requires a real `AzureAd__ClientId` and database connection at startup.
-2. On a **new** installation, create the five external data volumes named in `compose.env` with `docker volume create <volume-name>` before starting. On an existing installation, verify the names with `docker inspect` and reuse them. Do not replace or prune volumes. Create the PostgreSQL password file only for a new installation; the API and Analytics connection strings must use that same password and the internal host `postgres`. After PostgreSQL first starts on a new installation, create the disposable test database with `docker exec schwab-url-shortener-postgres createdb -U schwab_local Schwab_test_local`; do not run this on an existing database.
-3. From the repo root, set `SCHWAB_PRIVATE_DIR` to the directory containing your private `compose.env` and `apps.env`. Use the following explicit commands; they do not migrate an application database automatically:
-
-   ```bash
-    docker compose --env-file "$SCHWAB_PRIVATE_DIR/compose.env" --env-file "$SCHWAB_PRIVATE_DIR/apps.env" -f compose.existing.yaml config --quiet
-    docker compose --env-file "$SCHWAB_PRIVATE_DIR/compose.env" --env-file "$SCHWAB_PRIVATE_DIR/apps.env" -f compose.existing.yaml --profile migration build api web analytics migrate
-    docker compose --env-file "$SCHWAB_PRIVATE_DIR/compose.env" --env-file "$SCHWAB_PRIVATE_DIR/apps.env" -f compose.existing.yaml up -d postgres redis kafka
-    docker compose --env-file "$SCHWAB_PRIVATE_DIR/compose.env" --env-file "$SCHWAB_PRIVATE_DIR/apps.env" -f compose.existing.yaml --profile migration run --rm --no-deps migrate
-   docker exec schwab-url-shortener-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic schwab-managed-clicks-v2 --partitions 1 --replication-factor 1
-    docker compose --env-file "$SCHWAB_PRIVATE_DIR/compose.env" --env-file "$SCHWAB_PRIVATE_DIR/apps.env" -f compose.existing.yaml up -d api web analytics
-   ```
-
-   The migration container accepts `Schwab_test_local` by default and is idempotent. For `Schwab_local` or another application database, first create and verify a separate backup, review the target connection string privately, then set `SCHWAB_APP_MIGRATION_APPROVED=yes` in the Compose invocation. This explicit action is never part of API startup or ordinary `up`. Use the topic name configured in `analytics.env` when creating the Kafka topic.
-4. Check `http://localhost:63654/health/ready`, `http://localhost:63655/health/ready`, and the Compose health states. The Web guest page is `http://localhost:63655/`; the API guest create endpoint is `http://localhost:63654/api/urls/guest`. Analytics is healthy only when its configured PostgreSQL database and Kafka topic respond. API readiness checks migrations and Redis. Container health does not prove managed login, customer registration, or production operations.
-5. For real local OIDC callbacks, trust the local development certificate with `dotnet dev-certs https --trust`, export it to a private PFX using `dotnet dev-certs https -ep <private-pfx-path> -p <private-password>`, store that path and password only in `apps.env`, and use `-f compose.existing.yaml -f compose.https.yaml` on the Web `up` command. Keep the PFX mode `0600`. The HTTPS page is `https://localhost:63656/`, and the Web app registration must allow exactly `https://localhost:63656/signin-oidc` (and the matching signed-out callback if used). Configure the real Web client ID, tenant, client secret, and delegated scope in the private `web.env`; no runtime test identity is installed. Confirm the provider redirect and complete sign-in with the operator before claiming managed access.
-
-For a safe local stop, run `docker compose ... stop api web analytics` or `docker compose ... stop` with the same files; neither removes volumes. Back up each database to a private file before any application migration, for example `docker exec schwab-url-shortener-postgres pg_dump -U schwab_local -Fc -d Schwab_local > /private/path/Schwab_local.dump`, and verify that file before proceeding. Restore only to a separately chosen target using `pg_restore` after review; the normal startup commands never restore or truncate data. The Web Data Protection key ring persists in the dedicated `schwab-url-shortener-web-keys` volume across container recreation; protect this local volume and the private certificate. See [the dated Compose validation note](docs/2026-10-13-0942-full-local-compose-apps-validation.md) for this host's results and remaining identity gates.
-
-## Scenarios
-
-### Greenfield
-A new repo starts empty, so we build a clean shortener from scratch with a clear layer boundary and minimal infrastructure.
-
-### Brownfield
-The solution already contains placeholder .NET scaffolding; the project is upgraded from a template to a functional prototype without large-scale refactoring.
-
-### Ambiguous
-The exact assignment details are interpreted through the governing requirement document and narrow prototypes focus on what is likely expected for evaluation: create, resolve, and analytics behaviors.
-
-## Validation
-
-Run the solution test suite against a real, migrated PostgreSQL test database configured via `ConnectionStrings__ShortenerDb`:
-
-`dotnet test SchwabUrlShortener.slnx --nologo`
-
-The current tests cover guest expiry, global code uniqueness and races, anonymous redirects, tenant isolation, authorization, restart persistence, managed click capture, Kafka publish retry/replay/deduplication, cancellation, database constraints, Redis hit/miss/outage behavior, readiness failure, and Web components/API-client behavior. API tests use a test-only authentication handler. The integration tests clear only the guarded disposable database `Schwab_test_local`; never point them at the app database. Set `ConnectionStrings__Redis` and `Kafka__BootstrapServers` to isolated real instances for those tests. See [the Slice 5 validation note](docs/2026-10-13-0542-slice-5-kafka-analytics-validation.md) for delivery and operator details.
-
-## Notes
-
-- PostgreSQL is the only normal runtime repository. There is no in-memory fallback on connection failure.
-- Redis stores only redirect fields, with a maximum one-hour TTL. Guest TTL is shorter when required by its absolute seven-day expiry. Managed redirects capture a PostgreSQL outbox event on every redirect, including cache hits. Aggregate counts are eventually updated by the Kafka consumer.
-- The short codes are validated to be 4-12 characters with letters and numbers only.
-- URLs are normalized to absolute `http` or `https` addresses when missing a scheme.
+- [Engineering Summary](docs/ENGINEERING-SUMMARY.md): requirements, AI-assisted process, validation, scenarios, setup, trade-offs.
+- [Architecture Addendum](docs/ARCHITECTURE-ADDENDUM.md): diagrams, Azure topology, security, scaling, decision log.
+- [Product Roadmap](docs/ROADMAP.md): QR codes, an MCP server for AI agents, and an in-app AI assistant.
+- [Configuration and local operations](docs/runbooks/configuration-and-local-operations.md): every setting, manual `dotnet run`, existing-volume bundle.
+- [CI/CD runbook](docs/runbooks/ci-cd.md): pipeline gates, approvals, rollback.
+- [Azure infrastructure](infra/README.md): provisioning and operations.
+- `docs/YYYY-MM-DD-HHMM-*.md`: the dated record of every plan, AI handoff and validation, in order.
+- [`AGENTS.md`](AGENTS.md): the rules the AI agents worked under.

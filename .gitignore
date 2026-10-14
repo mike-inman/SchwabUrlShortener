@@ -8,3 +8,7 @@
 .codex/
 /docs/010 - Assignment - AI-Proficient Software Engineer 1.pdf
 /docs/job-description
+
+# Private assignment and delivery files (never publish)
+/docs/010 - *
+/CLAUDE.md
