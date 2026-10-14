@@ -66,6 +66,10 @@ jobs:
         run: |
           set -euo pipefail
           cat > "$TRACKF_OVERRIDE" <<'EOF'
+          services:
+            api:
+              environment:
+                VisitorHash__DailySecret: ci-compose-placeholder-visitor-hash-secret
           networks:
             default:
               ipam:

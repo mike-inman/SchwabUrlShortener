@@ -24,3 +24,9 @@ Rebase Track G onto PR #2's CI/CD merge at `7493c2e`, retain both tracks' change
 Michael reported that Track C deployed the `visitor-hash-secret` Key Vault secret and the API's `VisitorHash__DailySecret` reference, with healthy revision `ca-shortener-api--0000006`. This is operator confirmation, not an independent Azure check from this validation run.
 
 Next: push only this branch, open a PR to `main`, and require the full CI gate set, including build, integration, vulnerabilities, gitleaks, and Trivy. Report the run link and request Michael's approval before a rebase-merge. No direct push to `main` is authorized. Signed-in browser and live Azure ingestion acceptance remain separate from this local suite.
+
+## PR CI correction — 2026-10-14 11:20 CDT
+
+PR #4's first run passed build, vulnerabilities, gitleaks, and all three Trivy image scans. Its integration job stopped before tests because the CI Compose API lacked `VisitorHash__DailySecret`. The CI temporary network override now also supplies a disposable API value; no production configuration was changed.
+
+Reproduced the CI path with `deploy/local.env.example` in a second fresh project, `schwab-trackg-ci-repro-20261014`, on the temporary Track G `10.251.48.0/24` override. API, Web, and Analytics started; all 151 solution tests passed (39 integration, 43 unit, 69 Web); the host-startup probe passed for all three hosts. Only the preceding Track G disposable project was brought down, without deleting its volumes, to release the requested subnet. The follow-up PR run must confirm this in GitHub CI.
