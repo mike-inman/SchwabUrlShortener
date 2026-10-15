@@ -1,6 +1,7 @@
 using Azure;
 using Azure.Communication.Email;
 using Azure.Identity;
+using System.ComponentModel.DataAnnotations;
 using Npgsql;
 using Shortener.Application;
 using Shortener.Infrastructure;
@@ -26,9 +27,11 @@ public sealed class AzureCommunicationContactNotifier : IContactNotifier
     private readonly EmailClient _client;
     private readonly string _sender;
     private readonly string _recipient;
+    private readonly ILogger<AzureCommunicationContactNotifier> _logger;
 
-    public AzureCommunicationContactNotifier(IConfiguration configuration)
+    public AzureCommunicationContactNotifier(IConfiguration configuration, ILogger<AzureCommunicationContactNotifier> logger)
     {
+        _logger = logger;
         if (!Uri.TryCreate(configuration["ContactNotifications:Endpoint"], UriKind.Absolute, out var endpoint) || endpoint.Scheme != "https")
             throw new InvalidOperationException("ContactNotifications:Endpoint must be an HTTPS Azure Communication Services endpoint.");
         _sender = configuration["ContactNotifications:Sender"] ?? "";
@@ -43,15 +46,40 @@ public sealed class AzureCommunicationContactNotifier : IContactNotifier
 
     public async Task NotifyAsync(ContactMessage message, CancellationToken cancellationToken)
     {
-        var content = new EmailContent("Ziplio contact message " + message.Id.ToString("N"))
+        var email = BuildMessage(message, _sender, _recipient);
+        var operation = await _client.SendAsync(WaitUntil.Completed, email, message.Id, cancellationToken);
+        EnsureSucceeded(operation.HasValue ? operation.Value.Status : null);
+        _logger.LogInformation("ACS contact email accepted. MessageId={MessageId} OperationId={OperationId}", message.Id, operation.Id);
+    }
+
+    internal static void EnsureSucceeded(EmailSendStatus? status)
+    {
+        if (status != EmailSendStatus.Succeeded)
+            throw new ContactEmailDeliveryException("EmailSendFailed");
+    }
+
+    internal static EmailMessage BuildMessage(ContactMessage message, string sender, string recipient)
+    {
+        if (message.Email.Contains('\r') || message.Email.Contains('\n') || !new EmailAddressAttribute().IsValid(message.Email))
+            throw new ContactEmailDeliveryException("InvalidReplyTo");
+        var cleanSubject = (message.Subject ?? "").Replace("\r", "").Replace("\n", "").Trim();
+        if (cleanSubject.Length == 0) cleanSubject = "(no subject)";
+        var subject = "Ziplio contact: " + cleanSubject;
+        if (subject.Length > 120) subject = subject[..120];
+        var content = new EmailContent(subject)
         {
             PlainText = $"Name: {message.Name}\nEmail: {message.Email}\nSubject: {message.Subject ?? "(none)"}\n\n{message.Message}"
         };
-        var email = new EmailMessage(_sender, _recipient, content);
-        var operation = await _client.SendAsync(WaitUntil.Completed, email, message.Id, cancellationToken);
-        if (!operation.HasValue || operation.Value.Status != EmailSendStatus.Succeeded)
-            throw new InvalidOperationException("Contact email delivery was not confirmed by Azure Communication Services.");
+        var email = new EmailMessage(sender, recipient, content);
+        var cleanName = message.Name.Replace("\r", "").Replace("\n", "").Trim();
+        email.ReplyTo.Add(new EmailAddress(message.Email, cleanName));
+        return email;
     }
+}
+
+internal sealed class ContactEmailDeliveryException(string code) : Exception(code)
+{
+    public string Code { get; } = code;
 }
 
 public enum ContactNotificationOutcome { NoWork, Handled, Retried, Failed }
@@ -110,14 +138,27 @@ public sealed class ContactNotificationDispatcher(
             failure.Parameters.AddWithValue("id", message.Id);
             failure.Parameters.AddWithValue("backoff", backoff);
             failure.Parameters.AddWithValue("terminal", terminal);
-            failure.Parameters.AddWithValue("code", ex.GetType().Name);
+            var errorCode = ex switch
+            {
+                RequestFailedException azureFailure => SafeErrorCode(azureFailure.ErrorCode),
+                ContactEmailDeliveryException deliveryFailure => deliveryFailure.Code,
+                _ => ex.GetType().Name
+            };
+            failure.Parameters.AddWithValue("code", errorCode);
             await failure.ExecuteNonQueryAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             ContactMetrics.NotifyFailed.Add(1, new KeyValuePair<string, object?>("terminal", terminal));
-            logger.LogWarning("Contact notification {Outcome}. MessageId={MessageId} Attempt={Attempt} ExceptionType={ExceptionType}",
-                terminal ? "failed" : "retry", message.Id, attempts, ex.GetType().Name);
+            logger.LogWarning("Contact notification {Outcome}. MessageId={MessageId} Attempt={Attempt} ErrorCode={ErrorCode}",
+                terminal ? "failed" : "retry", message.Id, attempts, errorCode);
             return terminal ? ContactNotificationOutcome.Failed : ContactNotificationOutcome.Retried;
         }
+    }
+
+    private static string SafeErrorCode(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return nameof(RequestFailedException);
+        var safe = new string(code.Where(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.').Take(100).ToArray());
+        return safe.Length == 0 ? nameof(RequestFailedException) : safe;
     }
 }
 

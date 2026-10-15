@@ -91,6 +91,7 @@ public sealed class ContactFlowTests
             var failed = await db.ContactMessages.AsNoTracking().SingleAsync(x => x.Id == failingMessage.Id);
             Assert.Equal(5, failed.NotificationAttempts);
             Assert.NotNull(failed.FailedAtUtc);
+            Assert.Equal("EmailSendFailed", failed.LastNotificationErrorCode);
         }
         finally
         {
@@ -114,7 +115,7 @@ public sealed class ContactFlowTests
         public List<Guid> Sent { get; } = [];
         public Task NotifyAsync(ContactMessage message, CancellationToken cancellationToken)
         {
-            if (Fail) throw new InvalidOperationException("test notification failed");
+            if (Fail) throw new ContactEmailDeliveryException("EmailSendFailed");
             Sent.Add(message.Id);
             return Task.CompletedTask;
         }

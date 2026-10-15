@@ -9,6 +9,7 @@ param redisImage string
 param apiClientId string
 param webClientId string
 param enableScaleOutSettings bool = true
+param enableContactNotifications bool = false
 param customDomain string = 'ziplio.io'
 
 var suffix = substring(uniqueString(resourceGroup().id), 0, 6)
@@ -37,6 +38,7 @@ resource redisStorage 'Microsoft.Storage/storageAccounts@2024-01-01' existing = 
 resource apiId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = { name: 'id-shortener-api' }
 resource webId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = { name: 'id-shortener-web' }
 resource analyticsId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = { name: 'id-shortener-analytics' }
+resource contactCommunication 'Microsoft.Communication/communicationServices@2025-05-01' existing = { name: 'comm-shortener-${suffix}' }
 resource migrateId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = { name: 'id-shortener-migrate' }
 resource redisId 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = { name: 'id-shortener-redis' }
 
@@ -251,6 +253,13 @@ var analyticsScaleEnv = enableScaleOutSettings ? [
   { name: 'LiveUpdates__Channel', value: 'shortener:links:v1' }
   { name: 'LiveUpdates__DebounceMilliseconds', value: '1000' }
 ] : []
+var analyticsContactEnv = enableContactNotifications ? [
+  { name: 'ContactNotifications__Mode', value: 'AzureCommunicationEmail' }
+  { name: 'ContactNotifications__Endpoint', value: 'https://${contactCommunication.properties.hostName}' }
+  { name: 'ContactNotifications__Sender', value: 'noreply@ziplio.io' }
+  { name: 'ContactNotifications__ManagedIdentityClientId', value: analyticsId.properties.clientId }
+  { name: 'Contact__NotifyTo', value: 'mike.inman@ziplio.io' }
+] : []
 resource analytics 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'ca-shortener-analytics'
   location: location
@@ -281,7 +290,7 @@ resource analytics 'Microsoft.App/containerApps@2024-03-01' = {
           { name: 'Kafka__BootstrapServers', value: '${eventhubsName}.servicebus.windows.net:9093' }
           { name: 'Kafka__Topic', value: 'managed-clicks-v2' }
           { name: 'Kafka__ConsumerGroup', value: 'shortener-analytics-v1' }
-        ], analyticsScaleEnv, appInsightsEnv)
+        ], analyticsScaleEnv, analyticsContactEnv, appInsightsEnv)
         resources: { cpu: json('0.25'), memory: '0.5Gi' }
         probes: [
           { type: 'Liveness', httpGet: { path: '/health/live', port: 8080 }, initialDelaySeconds: 10, periodSeconds: 15 }
