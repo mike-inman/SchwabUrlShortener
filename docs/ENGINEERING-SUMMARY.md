@@ -289,7 +289,10 @@ The agents proposed; I decided. Each item below required my explicit approval in
 | 10-14 | **Agent deviation:** Track C briefly removed the resource lock to delete that temporary role without asking first. It was disclosed with evidence, the lock was restored, and the plan template now includes lock handling | Recorded; process corrected |
 | 10-14 | Provision the Insights visitor secret before the code that requires it, then rebase-merge [PR #4](https://github.com/mike-inman/SchwabUrlShortener/pull/4) (Insights) after green CI | Approved |
 | 10-14 | Rebase-merge [PR #2](https://github.com/mike-inman/SchwabUrlShortener/pull/2) (CI/CD) into `main` after green CI | Approved |
-| ⏳ | Production deploy approvals in the GitHub `production` environment | After the repository is public |
+| 10-14 | First OIDC deploy failed Azure login with `AADSTS700213` (no federated credential matched the token subject). GitHub now issues subjects with immutable owner and repository IDs, so the `github-production` credential on `id-github-deploy-ziplio` was set with `az` to `repo:mike-inman@18539260/SchwabUrlShortener@1416242610:environment:production`. It is still scoped to the `production` environment and needs no secret | Approved |
+| 10-14 | [Deploy run 38626309390](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38626309390) and its rollback falsely timed out on revisions that were `Running/Healthy`: the wait read the TSV status line by line. Automatic deploys were paused (`DEPLOY_ENABLED=false`), the parser was fixed and tested in [PR #12](https://github.com/mike-inman/SchwabUrlShortener/pull/12), and a gated manual dispatch had to pass before deploys were re-enabled. No user impact (0 server errors). [Incident note](2026-10-14-1636-revision-health-wait-incident.md) | Approved each step; deliberate rollback drill deferred until I confirm it |
+| 10-14 | Production deploy approvals in the GitHub `production` environment, from [run 38650685708](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38650685708) onward | Approved per deploy |
+| 10-15 | "Sign in does nothing": traced live to the CSP `connect-src 'self' wss:`. Blazor enhanced navigation fetches the page, the redirect to the Entra sign-in origin is blocked, the fetch fails, and Blazor never falls back to a full-page load. Shipped [PR #14](https://github.com/mike-inman/SchwabUrlShortener/pull/14) (sign-in links bypass enhanced navigation) and verified in the browser after deploy. The CSP fix for other protected-page navigations is split into its own [PR #16](https://github.com/mike-inman/SchwabUrlShortener/pull/16) instead of riding along with UI work | Approved |
 
 ---
 
@@ -505,7 +508,7 @@ The traceability table in [Section 4](#4-ai-assisted-execution) shows where AI o
 
 | Item | Value |
 | --- | --- |
-| Submitted commit | `1763c1e` on `main` (the commit in the submitted bundle) |
+| Submitted commit | `71ec217` on `main` (the commit in the submitted bundle) |
 | CI on that commit | [Green on `main`](https://github.com/mike-inman/SchwabUrlShortener/actions?query=branch%3Amain): build, unit, Web and integration tests, vulnerability, secret, CodeQL and container-image scans |
 | Public repository | <https://github.com/mike-inman/SchwabUrlShortener> (made public 2026-10-14) |
 | Bundle | `michael-inman.bundle`, built from a fresh clone of the public repository; `git bundle verify` passed; a clone of it contains no private files |
