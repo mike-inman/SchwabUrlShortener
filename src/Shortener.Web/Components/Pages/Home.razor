@@ -26,9 +26,14 @@
 
 <EditForm Model="form" OnSubmit="CreateAsync" FormName="guest-link" class="link-form">
     <label for="guest-url">Destination URL</label>
-    <InputText id="guest-url" class="form-control" type="url" required placeholder="https://example.com/page" @bind-Value="form.OriginalUrl" />
-    <label for="guest-code">Custom short code <span class="muted">(optional)</span></label>
-    <InputText id="guest-code" class="form-control" maxlength="64" @bind-Value="form.ShortCode" />
+    <InputText id="guest-url" class="form-control" type="url" required pattern="https?://.+" title="@CreateLinkFormValidation.UrlMessage" placeholder="https://example.com/page" autofocus="@focusDestination" aria-invalid="@(fieldErrors.DestinationUrl is not null ? "true" : null)" aria-describedby="@(fieldErrors.DestinationUrl is not null ? "guest-url-browser-error guest-url-error" : "guest-url-browser-error")" @bind-Value="form.OriginalUrl" />
+    <p id="guest-url-browser-error" class="field-error browser-validation" role="alert">@CreateLinkFormValidation.UrlMessage</p>
+    @if (fieldErrors.DestinationUrl is not null) { <p id="guest-url-error" class="field-error" role="alert">@fieldErrors.DestinationUrl</p> }
+    <label for="guest-code">Custom short code</label>
+    <InputText id="guest-code" class="form-control" pattern="[A-Za-z0-9]{4,12}" maxlength="12" title="@CreateLinkFormValidation.CodeMessage" aria-invalid="@(fieldErrors.ShortCode is not null ? "true" : null)" aria-describedby="@(fieldErrors.ShortCode is not null ? "guest-code-hint guest-code-browser-error guest-code-error" : "guest-code-hint guest-code-browser-error")" @bind-Value="form.ShortCode" />
+    <p id="guest-code-hint" class="field-hint">4–12 letters or numbers (optional)</p>
+    <p id="guest-code-browser-error" class="field-error browser-validation" role="alert">@CreateLinkFormValidation.CodeMessage</p>
+    @if (fieldErrors.ShortCode is not null) { <p id="guest-code-error" class="field-error" role="alert">@fieldErrors.ShortCode</p> }
     <button class="btn btn-primary" type="submit" disabled="@busy">@(busy ? "Creating…" : "Create guest link")</button>
 </EditForm>
 
@@ -52,17 +57,28 @@
     private bool busy;
     private string? error;
     private LinkResult? created;
+    private CreateLinkFormErrors fieldErrors = new();
+    private bool focusDestination;
 
     private async Task CreateAsync()
     {
-        busy = true;
         error = null;
         created = null;
+        focusDestination = false;
+        fieldErrors = CreateLinkFormValidation.Validate(form.OriginalUrl, form.ShortCode);
+        if (fieldErrors.HasErrors) return;
+        busy = true;
         try
         {
-            created = await Api.CreateGuestAsync(new(form.OriginalUrl, string.IsNullOrWhiteSpace(form.ShortCode) ? null : form.ShortCode.Trim()));
+            created = await Api.CreateGuestAsync(new(form.OriginalUrl, string.IsNullOrEmpty(form.ShortCode) ? null : form.ShortCode));
+            submittedForm = new();
+            focusDestination = true;
         }
-        catch (ShortenerApiException ex) { error = ex.Message; }
+        catch (ShortenerApiException ex)
+        {
+            fieldErrors = CreateLinkFormValidation.FromApi(ex);
+            if (!fieldErrors.HasErrors) error = ex.Message;
+        }
         catch (Exception ex)
         {
             Logger.LogError("Guest link creation failed unexpectedly. ExceptionType={ExceptionType}", ex.GetType().Name);

@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Net;
 using Bunit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Components;
@@ -123,6 +124,73 @@ public sealed class ComponentTests : BunitContext
     }
 
     [Fact]
+    public async Task Guest_form_shows_code_hint_then_clears_and_focuses_after_success()
+    {
+        var api = Setup();
+        CreateLinkRequest? submitted = null;
+        api.Guest = request => { submitted = request; return Task.FromResult(new LinkResult(Created, new Uri("https://api.example.test/r/abc"))); };
+        var view = Render<Home>();
+        Assert.Equal("[A-Za-z0-9]{4,12}", view.Find("#guest-code").GetAttribute("pattern"));
+        Assert.Equal("12", view.Find("#guest-code").GetAttribute("maxlength"));
+        Assert.Contains("4–12 letters or numbers (optional)", view.Find("#guest-code-hint").TextContent);
+        view.Find("#guest-url").Change("https://example.com/page");
+        view.Find("#guest-code").Change("Alpha4");
+        await view.Find("form").SubmitAsync();
+        Assert.Equal("Alpha4", submitted?.ShortCode);
+        Assert.Equal("", view.Find("#guest-url").GetAttribute("value") ?? "");
+        Assert.Equal("", view.Find("#guest-code").GetAttribute("value") ?? "");
+        Assert.NotNull(view.Find("#guest-url").GetAttribute("autofocus"));
+    }
+
+    [Theory]
+    [InlineData("example.com", "Alpha4", "guest-url-error", CreateLinkFormValidation.UrlMessage)]
+    [InlineData("https://example.com", "bad!", "guest-code-error", CreateLinkFormValidation.CodeMessage)]
+    public async Task Guest_form_retains_input_and_links_validation_to_field(
+        string url, string code, string errorId, string message)
+    {
+        var api = Setup();
+        var calls = 0;
+        api.Guest = _ => { calls++; throw new InvalidOperationException(); };
+        var view = Render<Home>();
+        view.Find("#guest-url").Change(url);
+        view.Find("#guest-code").Change(code);
+        await view.Find("form").SubmitAsync();
+        Assert.Equal(0, calls);
+        Assert.Equal(url, view.Find("#guest-url").GetAttribute("value"));
+        Assert.Equal(code, view.Find("#guest-code").GetAttribute("value"));
+        Assert.Equal(message, view.Find("#" + errorId).TextContent);
+        Assert.Contains(errorId, view.Find(errorId.Contains("url") ? "#guest-url" : "#guest-code").GetAttribute("aria-describedby"));
+    }
+
+    [Fact]
+    public async Task Guest_duplicate_api_error_is_next_to_code_and_keeps_input()
+    {
+        var api = Setup();
+        api.Guest = _ => throw new ShortenerApiException("Generic conflict", HttpStatusCode.Conflict);
+        var view = Render<Home>();
+        view.Find("#guest-url").Change("https://example.com");
+        view.Find("#guest-code").Change("Alpha4");
+        await view.Find("form").SubmitAsync();
+        Assert.Equal(CreateLinkFormValidation.DuplicateMessage, view.Find("#guest-code-error").TextContent);
+        Assert.Equal("Alpha4", view.Find("#guest-code").GetAttribute("value"));
+    }
+
+    [Theory]
+    [InlineData(CreateLinkField.DestinationUrl, "guest-url-error", CreateLinkFormValidation.UrlMessage)]
+    [InlineData(CreateLinkField.ShortCode, "guest-code-error", CreateLinkFormValidation.CodeMessage)]
+    public async Task Guest_api_400_identifies_the_reported_field(CreateLinkField field, string errorId, string message)
+    {
+        var api = Setup();
+        api.Guest = _ => throw new ShortenerApiException("Generic fallback", HttpStatusCode.BadRequest, field);
+        var view = Render<Home>();
+        view.Find("#guest-url").Change("https://example.com");
+        view.Find("#guest-code").Change("Alpha4");
+        await view.Find("form").SubmitAsync();
+        Assert.Equal(message, view.Find("#" + errorId).TextContent);
+        Assert.DoesNotContain("Generic fallback", view.Markup);
+    }
+
+    [Fact]
     public async Task Guest_form_shows_safe_api_failure()
     {
         var api = Setup();
@@ -158,6 +226,102 @@ public sealed class ComponentTests : BunitContext
         view.WaitForAssertion(() => Assert.Contains("Redirects: 4", view.Markup));
         Assert.Contains("Details for", view.Markup);
         Assert.True(api.AuthenticatedCalls >= 3);
+    }
+
+    [Fact]
+    public async Task Managed_form_clears_and_focuses_after_success()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        api.ManagedCreate = _ => Task.FromResult(new LinkResult(Created, new Uri("https://api.example.test/r/abc")));
+        var view = Render<Dashboard>();
+        Assert.Contains("4–12 letters or numbers (optional)", view.Find("#managed-code-hint").TextContent);
+        view.Find("#managed-url").Change("https://example.com");
+        view.Find("#managed-code").Change("Alpha4");
+        await view.Find("form").SubmitAsync();
+        view.WaitForAssertion(() => Assert.Equal("", view.Find("#managed-url").GetAttribute("value") ?? ""));
+        Assert.Equal("", view.Find("#managed-code").GetAttribute("value") ?? "");
+        Assert.Contains(JSInterop.Invocations, invocation => invocation.Identifier.Contains("focus", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("example.com", "Alpha4", "managed-url-error", CreateLinkFormValidation.UrlMessage)]
+    [InlineData("https://example.com", "bad!", "managed-code-error", CreateLinkFormValidation.CodeMessage)]
+    public async Task Managed_form_retains_input_and_links_validation_to_field(
+        string url, string code, string errorId, string message)
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        api.ManagedCreate = _ => throw new InvalidOperationException("Should not call API");
+        var view = Render<Dashboard>();
+        view.Find("#managed-url").Change(url);
+        view.Find("#managed-code").Change(code);
+        await view.Find("form").SubmitAsync();
+        Assert.Equal(url, view.Find("#managed-url").GetAttribute("value"));
+        Assert.Equal(code, view.Find("#managed-code").GetAttribute("value"));
+        Assert.Equal(message, view.Find("#" + errorId).TextContent);
+        Assert.Contains(errorId, view.Find(errorId.Contains("url") ? "#managed-url" : "#managed-code").GetAttribute("aria-describedby"));
+    }
+
+    [Fact]
+    public async Task Managed_duplicate_api_error_is_next_to_code_and_keeps_input()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        api.ManagedCreate = _ => throw new ShortenerApiException("Generic conflict", HttpStatusCode.Conflict);
+        var view = Render<Dashboard>();
+        view.Find("#managed-url").Change("https://example.com");
+        view.Find("#managed-code").Change("Alpha4");
+        await view.Find("form").SubmitAsync();
+        Assert.Equal(CreateLinkFormValidation.DuplicateMessage, view.Find("#managed-code-error").TextContent);
+        Assert.Equal("Alpha4", view.Find("#managed-code").GetAttribute("value"));
+    }
+
+    [Theory]
+    [InlineData(CreateLinkField.DestinationUrl, "managed-url-error", CreateLinkFormValidation.UrlMessage)]
+    [InlineData(CreateLinkField.ShortCode, "managed-code-error", CreateLinkFormValidation.CodeMessage)]
+    public async Task Managed_api_400_identifies_the_reported_field(CreateLinkField field, string errorId, string message)
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed]);
+        api.ManagedCreate = _ => throw new ShortenerApiException("Generic fallback", HttpStatusCode.BadRequest, field);
+        var view = Render<Dashboard>();
+        view.Find("#managed-url").Change("https://example.com");
+        view.Find("#managed-code").Change("Alpha4");
+        await view.Find("form").SubmitAsync();
+        Assert.Equal(message, view.Find("#" + errorId).TextContent);
+        Assert.DoesNotContain("Generic fallback", view.Markup);
+    }
+
+    [Fact]
+    public void Dashboard_uses_browser_time_zone_for_created_and_last_accessed()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("operator");
+        var api = Setup();
+        var timestamp = new DateTimeOffset(2026, 10, 14, 19, 31, 0, TimeSpan.Zero);
+        api.List = _ => Task.FromResult<IReadOnlyList<ManagedLink>>([Managed with
+        {
+            CreatedAtUtc = timestamp, LastAccessedAtUtc = timestamp
+        }]);
+        api.Analytics = _ => Task.FromResult(Managed with { LastAccessedAtUtc = timestamp });
+        JSInterop.SetupModule("./insights.js").Setup<ViewerPreferences>("viewerPreferences")
+            .SetResult(new("America/Chicago", false));
+        var view = Render<Dashboard>();
+        var local = TimeZoneInfo.ConvertTime(timestamp, TimeZoneInfo.FindSystemTimeZoneById("America/Chicago"));
+        view.WaitForAssertion(() => Assert.Contains(local.ToString("g"), view.Find("tbody").TextContent));
+        Assert.Contains("Times shown in America/Chicago", view.Markup);
+        Assert.DoesNotContain(timestamp.ToString("g"), view.Find("tbody").TextContent);
+        view.Find("button.btn-sm").Click();
+        view.WaitForAssertion(() => Assert.Contains(local.ToString("f"), view.Find("section.result").TextContent));
     }
 
     [Fact]
@@ -464,6 +628,7 @@ public sealed class ComponentTests : BunitContext
 
     private FakeApi Setup(bool customer = false)
     {
+        JSInterop.Mode = JSRuntimeMode.Loose;
         var api = new FakeApi();
         Services.AddSingleton<IShortenerApiClient>(api);
         Services.AddSingleton(new IdentityAvailability(true, customer));

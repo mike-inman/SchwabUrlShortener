@@ -201,6 +201,5 @@ public partial class Insights
         if (module is not null) await module.DisposeAsync();
         lifetime.Dispose();
     }
-    private sealed record ViewerPreferences(string TimeZone, bool ReducedMotion);
     private sealed record HeatCell(string Weekday, string HourLabel, long Clicks);
 }
