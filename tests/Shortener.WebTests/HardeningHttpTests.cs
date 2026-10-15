@@ -95,6 +95,23 @@ public sealed class HardeningHttpTests
     }
 
     [Fact]
+    public async Task Web_home_sets_dark_canvas_before_stylesheets()
+    {
+        using var factory = new WebFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://example.test"), AllowAutoRedirect = false
+        });
+        using var response = await client.GetAsync("/");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var html = await response.Content.ReadAsStringAsync();
+        Assert.Matches("<html[^>]*style=\"background-color:#0B1426\"", html);
+        Assert.Contains("<meta name=\"color-scheme\" content=\"dark\"", html);
+        Assert.True(html.IndexOf("color-scheme", StringComparison.Ordinal) <
+                    html.IndexOf("rel=\"stylesheet\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Favicon_assets_are_served_under_same_origin_csp()
     {
         using var factory = new WebFactory();
