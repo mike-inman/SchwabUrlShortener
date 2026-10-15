@@ -43,7 +43,13 @@
 {
     <section class="result" role="status">
         <h2>Guest link ready</h2>
-        <p><a href="@created.PublicUrl" target="_blank" rel="noopener noreferrer">@created.PublicUrl</a></p>
+        <p><a href="@created.PublicUrl" target="_blank" rel="noopener noreferrer">@created.PublicUrl</a>
+            <button type="button" class="copy-link btn btn-sm btn-outline-primary ms-2" data-copy-text="@created.PublicUrl" aria-label="Copy short link @created.Link.ShortCode">
+                <svg class="copy-icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+                <svg class="copy-check" aria-hidden="true" hidden viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 12 5 5L20 6"/></svg>
+                <span class="copy-label">Copy</span>
+            </button><span class="visually-hidden copy-announcement" aria-live="polite"></span>
+        </p>
         <p>Expires: @created.Link.ExpiresAtUtc?.ToLocalTime().ToString("f")</p>
         <p class="muted">Save this link now. Guest links have no analytics or management controls.</p>
     </section>

@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using System.Net;
+using System.Reflection;
+using ApexCharts;
 using Bunit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Components;
@@ -119,6 +121,8 @@ public sealed class ComponentTests : BunitContext
         await submit;
         view.WaitForAssertion(() => Assert.Contains("Guest link ready", view.Markup));
         Assert.Contains("Expires:", view.Markup);
+        Assert.Equal("https://api.example.test/r/abc", view.Find("button.copy-link").GetAttribute("data-copy-text"));
+        Assert.Equal("Copy short link abc", view.Find("button.copy-link").GetAttribute("aria-label"));
         Assert.DoesNotContain("Details", view.Markup);
         Assert.DoesNotContain("Redirects:", view.Markup);
     }
@@ -215,14 +219,17 @@ public sealed class ComponentTests : BunitContext
         view.WaitForAssertion(() => Assert.Contains("Your links", view.Markup));
         Assert.DoesNotContain("Updates automatically", view.Markup);
         Assert.Single(view.FindAll(".link-row-actions"));
+        Assert.Equal("https://api.example.test/r/abc", view.Find("td button.copy-link").GetAttribute("data-copy-text"));
         Assert.Equal("My links", view.Find("h1").TextContent);
         Assert.Contains("abc", view.Markup);
         view.Find("#managed-url").Change("https://example.com");
         await view.Find("form").SubmitAsync();
         view.WaitForAssertion(() => Assert.Contains("Link created", view.Markup));
+        Assert.Equal("https://api.example.test/r/abc", view.Find(".toast button.copy-link").GetAttribute("data-copy-text"));
+        Assert.Equal("https://api.example.test/r/abc", view.Find(".result button.copy-link").GetAttribute("data-copy-text"));
         Assert.DoesNotContain(">Refresh</button>", view.Markup);
         Assert.Contains("selected-link", view.Markup);
-        await view.Find("button.btn-sm").ClickAsync();
+        await view.Find("button[aria-label='Details for abc']").ClickAsync();
         view.WaitForAssertion(() => Assert.Contains("Redirects: 4", view.Markup));
         Assert.Contains("Details for", view.Markup);
         Assert.True(api.AuthenticatedCalls >= 3);
@@ -320,7 +327,7 @@ public sealed class ComponentTests : BunitContext
         view.WaitForAssertion(() => Assert.Contains(local.ToString("g"), view.Find("tbody").TextContent));
         Assert.Contains("Times shown in America/Chicago", view.Markup);
         Assert.DoesNotContain(timestamp.ToString("g"), view.Find("tbody").TextContent);
-        view.Find("button.btn-sm").Click();
+        view.Find("button[aria-label='Details for abc']").Click();
         view.WaitForAssertion(() => Assert.Contains(local.ToString("f"), view.Find("section.result").TextContent));
     }
 
@@ -356,7 +363,7 @@ public sealed class ComponentTests : BunitContext
         var view = Render<Dashboard>();
         view.WaitForAssertion(() => Assert.Contains("Redirects", view.Markup));
         Assert.DoesNotContain(">Refresh</button>", view.Markup);
-        view.Find("button.btn-sm").Click();
+        view.Find("button[aria-label='Details for abc']").Click();
         snapshot = Managed with { HitCount = 5 };
         liveUpdates.Signal(LinkChangeScope.Tenant, Tenant);
         view.WaitForAssertion(() => { Assert.Contains("<td>5</td>", view.Markup); Assert.Contains("Redirects: 5", view.Markup); }, TimeSpan.FromSeconds(8));
@@ -574,6 +581,10 @@ public sealed class ComponentTests : BunitContext
         JSInterop.Mode = JSRuntimeMode.Loose;
         var view = Render<Insights>(parameters => parameters.Add(x => x.ShortCode, "abc"));
         view.WaitForAssertion(() => Assert.Contains("No clicks yet", view.Markup));
+        view.WaitForAssertion(() => Assert.Contains("No clicks in the last 28 days", view.Markup));
+        var emptyOptions = (ApexChartBaseOptions)typeof(Insights).GetField("heatOptions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view.Instance)!;
+        Assert.Single(emptyOptions.PlotOptions!.Heatmap!.ColorScale!.Ranges!);
+        Assert.Equal("#1E2C44", emptyOptions.PlotOptions.Heatmap.ColorScale.Ranges[0].Color);
         Assert.Equal(4, view.FindAll(".insights-tile h2").Count);
         Assert.Contains("Insights excludes detected bots", view.Markup);
     }
@@ -624,6 +635,17 @@ public sealed class ComponentTests : BunitContext
         Assert.Contains("visually-hidden", view.Markup);
         Assert.Contains("Top referrers", view.Markup);
         Assert.Contains("When your audience clicks", view.Markup);
+        var fields = BindingFlags.Instance | BindingFlags.NonPublic;
+        var options = (ApexChartBaseOptions)typeof(Insights).GetField("heatOptions", fields)!.GetValue(view.Instance)!;
+        var heatmap = options.PlotOptions!.Heatmap!;
+        Assert.False(heatmap.Distributed);
+        Assert.False(options.DataLabels!.Enabled);
+        Assert.Equal("#1E2C44", heatmap.ColorScale!.Ranges![0].Color);
+        Assert.Equal("#59E6CF", heatmap.ColorScale.Ranges[^1].Color);
+        Assert.Equal(3, heatmap.ColorScale.Ranges[^1].To);
+        var seriesOrder = (string[])typeof(Insights).GetField("HeatSeriesOrder", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        Assert.Equal(new[] { "Sun", "Sat", "Fri", "Thu", "Wed", "Tue", "Mon" }, seriesOrder);
+        Assert.Contains("clicks across the last 28 days", view.Markup);
     }
 
     private FakeApi Setup(bool customer = false)
