@@ -22,7 +22,13 @@
                 <strong class="me-auto">@notice.Title</strong>
                 <button type="button" class="btn-close" aria-label="Close notification" @onclick="DismissNotice"></button>
             </div>
-            <div class="toast-body">@notice.MessagePrefix<strong class="dashboard-toast-code">“@notice.ShortCode”</strong>@notice.MessageSuffix</div>
+            <div class="toast-body">@notice.MessagePrefix<strong class="dashboard-toast-code">“@notice.ShortCode”</strong>@notice.MessageSuffix
+                <button type="button" class="copy-link btn btn-sm btn-outline-primary ms-2" data-copy-text="@Api.PublicUrl(notice.ShortCode)" aria-label="Copy short link @notice.ShortCode">
+                    <svg class="copy-icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+                    <svg class="copy-check" aria-hidden="true" hidden viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 12 5 5L20 6"/></svg>
+                    <span class="copy-label">Copy</span>
+                </button><span class="visually-hidden copy-announcement" aria-live="polite"></span>
+            </div>
         </div>
     </div>
 }
@@ -84,7 +90,13 @@ else
                         @foreach (var link in links)
                         {
                             <tr class="@(selected?.ShortCode == link.ShortCode ? "selected-link" : null)" aria-selected="@(selected?.ShortCode == link.ShortCode)">
-                                <td><a href="@Api.PublicUrl(link.ShortCode)" target="_blank" rel="noopener noreferrer">@link.ShortCode</a></td>
+                                <td><a href="@Api.PublicUrl(link.ShortCode)" target="_blank" rel="noopener noreferrer">@link.ShortCode</a>
+                                    <button type="button" class="copy-link btn btn-sm btn-outline-primary ms-2" data-copy-text="@Api.PublicUrl(link.ShortCode)" aria-label="Copy short link @link.ShortCode">
+                                        <svg class="copy-icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+                                        <svg class="copy-check" aria-hidden="true" hidden viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 12 5 5L20 6"/></svg>
+                                        <span class="copy-label">Copy</span>
+                                    </button><span class="visually-hidden copy-announcement" aria-live="polite"></span>
+                                </td>
                                 <td class="destination">@link.OriginalUrl</td>
                                 <td>@FormatViewerTime(link.CreatedAtUtc, "g")</td>
                                 <td>@link.HitCount</td>
@@ -111,7 +123,13 @@ else
     @if (selected is not null)
     {
         <section class="result">
-            <h2>Details for <a href="@Api.PublicUrl(selected.ShortCode)" target="_blank" rel="noopener noreferrer">@selected.ShortCode</a></h2>
+            <h2>Details for <a href="@Api.PublicUrl(selected.ShortCode)" target="_blank" rel="noopener noreferrer">@selected.ShortCode</a>
+                <button type="button" class="copy-link btn btn-sm btn-outline-primary ms-2" data-copy-text="@Api.PublicUrl(selected.ShortCode)" aria-label="Copy short link @selected.ShortCode">
+                    <svg class="copy-icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+                    <svg class="copy-check" aria-hidden="true" hidden viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 12 5 5L20 6"/></svg>
+                    <span class="copy-label">Copy</span>
+                </button><span class="visually-hidden copy-announcement" aria-live="polite"></span>
+            </h2>
             <p>Destination: @selected.OriginalUrl</p>
             <p>Redirects: @selected.HitCount</p>
             <p>Last accessed: @(selected.LastAccessedAtUtc is { } accessed ? FormatViewerTime(accessed, "f") : "Never")</p>

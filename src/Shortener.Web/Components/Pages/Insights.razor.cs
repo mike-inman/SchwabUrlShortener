@@ -35,6 +35,7 @@ public partial class Insights
     private ApexChart<HeatCell>? heatChart;
     private IReadOnlyList<HeatCell> heatCells = [];
     private static readonly string[] Weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    private static readonly string[] HeatSeriesOrder = Weekdays.Reverse().ToArray();
     private ApexChartOptions<InsightPoint> clickOptions = new();
     private ApexChartOptions<InsightGroup> referrerOptions = new();
     private ApexChartOptions<InsightGroup> deviceOptions = new();
@@ -87,6 +88,8 @@ public partial class Insights
             link = await Api.GetWorkspaceManagedLinkAsync(id, ShortCode, user, lifetime.Token);
             data = await Api.GetWorkspaceInsightsAsync(id, ShortCode, range, user, lifetime.Token);
             heatCells = BuildHeat(data);
+            if (heatOptions.PlotOptions?.Heatmap is { } heatmap)
+                heatmap.ColorScale = HeatColorScale(heatCells);
             error = null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -133,11 +136,11 @@ public partial class Insights
 
     private async Task UpdateChartsAsync()
     {
-        if (data is null || data.TotalClicks == 0) return;
+        if (data is null) return;
         if (clickChart is not null) await clickChart.UpdateSeriesAsync();
         if (referrerChart is not null) await referrerChart.UpdateSeriesAsync();
         if (deviceChart is not null) await deviceChart.UpdateSeriesAsync();
-        if (heatChart is not null) await heatChart.UpdateSeriesAsync();
+        if (heatChart is not null) await heatChart.UpdateOptionsAsync(false, true, !reducedMotion, new ZoomOptions());
     }
 
     private void OnWorkspaceChanged() => _ = InvokeAsync(() =>
@@ -165,8 +168,11 @@ public partial class Insights
         var busiest = BuildHeat(value).OrderByDescending(x => x.Clicks).FirstOrDefault();
         return busiest is null || busiest.Clicks == 0 ? "No clicks yet" : $"{busiest.Weekday}, {busiest.HourLabel}";
     }
-    private string HeatSummary() => heatCells.Count == 0 ? "No hourly click data." :
-        $"Busiest hour: {BusiestHour(data!)}. {heatCells.Sum(x => x.Clicks)} clicks across the last 28 days.";
+    private string HeatSummary() => heatCells.Count == 0 || heatCells.All(x => x.Clicks == 0)
+        ? "No clicks in the last 28 days."
+        : $"Busiest hour: {BusiestHour(data!)}. {heatCells.Sum(x => x.Clicks)} clicks across the last 28 days.";
+    private static string HeatTooltip(HeatCell cell) =>
+        $"{cell.Weekday} {cell.HourLabel} · {cell.Clicks} {(cell.Clicks == 1 ? "click" : "clicks")}";
     private IReadOnlyList<HeatCell> BuildHeat(LinkInsights value)
     {
         var counts = InsightsTime.ByLocalWeekdayHour(value.HeatmapHours, timeZone);
@@ -182,8 +188,29 @@ public partial class Insights
             PlotOptions = new() { Bar = new() { Horizontal = true, BorderRadius = 6 } }, Theme = new() { Mode = Mode.Dark } };
         deviceOptions = new() { Chart = Chart(260), Colors = ["#59E6CF", "#7C93B8", "#3A5680"],
             PlotOptions = new() { Pie = new() { Donut = new() { Size = "72%" } } }, Theme = new() { Mode = Mode.Dark } };
-        heatOptions = new() { Chart = Chart(300), Theme = new() { Mode = Mode.Dark },
-            PlotOptions = new() { Heatmap = new() { Radius = 4, EnableShades = false } } };
+        heatOptions = new() { Chart = Chart(300), Colors = ["#59E6CF"], Theme = new() { Mode = Mode.Dark },
+            DataLabels = new() { Enabled = false },
+            PlotOptions = new() { Heatmap = new() { Radius = 4, EnableShades = false, Distributed = false,
+                ColorScale = HeatColorScale(heatCells) } } };
+    }
+    private static PlotOptionsHeatmapColorScale HeatColorScale(IReadOnlyList<HeatCell> cells)
+    {
+        var max = cells.Count == 0 ? 0 : cells.Max(cell => cell.Clicks);
+        var ranges = new List<PlotOptionsHeatmapColorScaleRange>
+        {
+            new() { From = 0, To = 0, Name = "No clicks", Color = "#1E2C44" }
+        };
+        var colors = new[] { "#204D50", "#287E77", "#39B5A5", "#59E6CF" };
+        var from = 1L;
+        for (var level = 1; level <= 4 && from <= max; level++)
+        {
+            var to = Math.Max(from, max / 4 * level + (max % 4 * level + 3) / 4);
+            var colorIndex = (int)Math.Ceiling(to * 4.0 / max) - 1;
+            ranges.Add(new() { From = from, To = to, Name = $"{from}–{to} clicks", Color = colors[colorIndex] });
+            if (to == max) break;
+            from = to + 1;
+        }
+        return new() { Min = 0, Max = max, Ranges = ranges };
     }
     private Chart Chart(int height) => new() { Background = "transparent", ForeColor = "#9DB0CB", Height = height,
         Animations = new() { Enabled = !reducedMotion, Easing = Easing.Easeinout, Speed = 900,
