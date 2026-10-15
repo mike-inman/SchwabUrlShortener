@@ -144,6 +144,12 @@ main.container { max-width: 1120px; padding-top: 3rem; padding-bottom: 5rem; fle
 .link-row-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .contact-honeypot { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .field-error { color: #FFC2C7; font-size: .9rem; }
+.browser-validation { display: none; margin: 0; }
+#guest-url:user-invalid ~ #guest-url-browser-error,
+#guest-code:user-invalid ~ #guest-code-browser-error,
+#managed-url:user-invalid ~ #managed-url-browser-error,
+#managed-code:user-invalid ~ #managed-code-browser-error { display: block; }
+.field-hint { color: var(--zl-muted); font-size: .875rem; margin: 0; }
 .workspace-caption { margin: .35rem 0 .75rem; font-size: .875rem; }
 .signed-out-panel { max-width: 680px; padding: 2rem; }
 .signed-out-panel h1 { margin: 1rem 0; }
