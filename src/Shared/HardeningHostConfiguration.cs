@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
+using Shortener.Application;
 
 namespace Shortener.Shared;
 
@@ -13,6 +14,7 @@ public static class HardeningHostConfiguration
     public const string GuestCreatePolicy = "guest-create";
     public const string RedirectPolicy = "redirect";
     public const string ManagedPolicy = "managed";
+    public const string ContactPolicy = "contact";
     private static readonly Meter Meter = new("Shortener.RateLimiting");
     private static readonly Counter<long> Rejections = Meter.CreateCounter<long>("shortener.rate_limit.rejections");
     private static readonly ConcurrentDictionary<string, long> LoggedWindows = new();
@@ -40,6 +42,11 @@ public static class HardeningHostConfiguration
                             PermitLimit = guestLimit, Window = TimeSpan.FromSeconds(guestWindow), QueueLimit = 0,
                             AutoReplenishment = true
                         })
+                        : enabled && HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/contact"
+                        ? RateLimitPartition.GetFixedWindowLimiter("contact:" + ClientKey(context), _ => new FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = 5, Window = TimeSpan.FromMinutes(10), QueueLimit = 0, AutoReplenishment = true
+                        })
                         : RateLimitPartition.GetNoLimiter("other"));
             options.AddPolicy(GuestCreatePolicy, context => enabled
                 ? RateLimitPartition.GetFixedWindowLimiter(ClientKey(context), _ => new FixedWindowRateLimiterOptions
@@ -63,16 +70,25 @@ public static class HardeningHostConfiguration
                     AutoReplenishment = true
                 })
                 : RateLimitPartition.GetNoLimiter(ManagedKey(context)));
+            options.AddPolicy(ContactPolicy, context => enabled
+                ? RateLimitPartition.GetFixedWindowLimiter("contact:" + ClientKey(context), _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 5, Window = TimeSpan.FromMinutes(10), QueueLimit = 0, AutoReplenishment = true
+                })
+                : RateLimitPartition.GetNoLimiter("contact:" + ClientKey(context)));
             options.OnRejected = async (rejected, token) =>
             {
                 var context = rejected.HttpContext;
                 var policy = context.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName
-                    ?? (web && HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/" ? GuestCreatePolicy : "unknown");
+                    ?? (web && HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/" ? GuestCreatePolicy :
+                        web && HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/contact" ? ContactPolicy : "unknown");
                 var key = policy == ManagedPolicy ? ManagedKey(context) : ClientKey(context);
                 var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
                 var window = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 60;
                 var logKey = policy + ":" + digest + ":" + window;
                 Rejections.Add(1, new KeyValuePair<string, object?>("policy", policy));
+                if (policy == ContactPolicy)
+                    ContactMetrics.Rejected.Add(1, new KeyValuePair<string, object?>("reason", "rate_limit"));
                 var retry = rejected.Lease.TryGetMetadata(MetadataName.RetryAfter, out TimeSpan after)
                     ? Math.Max(1, (int)Math.Ceiling(after.TotalSeconds)) : 60;
                 context.Response.Headers["Retry-After"] = retry.ToString(CultureInfo.InvariantCulture);
@@ -127,8 +143,8 @@ public static class HardeningHostConfiguration
             if (nonce is not null) context.Items["CspNonce"] = nonce;
             var csp = web
                 ? "default-src 'self'; script-src 'self' 'nonce-" + nonce + "'; " +
-                  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-                  "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; " +
+                  "style-src 'self' 'unsafe-inline'; " +
+                  "font-src 'self'; img-src 'self' data:; " +
                   "connect-src 'self' wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" +
                   (formOrigins.Count == 0 ? "" : " " + string.Join(' ', formOrigins))
                 : "frame-ancestors 'none'";
@@ -145,6 +161,9 @@ public static class HardeningHostConfiguration
     }
 
     private static string ClientKey(HttpContext context) => context.Connection.RemoteIpAddress?.MapToIPv6().ToString() ?? "unknown";
+
+    public static string ClientKeyHash(HttpContext context) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(ClientKey(context))));
 
     private static string ManagedKey(HttpContext context)
     {

@@ -104,6 +104,27 @@ public sealed class ApiClientTests
         Assert.DoesNotContain("provider secret detail", ex.Message);
     }
 
+    [Theory]
+    [InlineData("Original URL must be an absolute http or https URL. (Parameter 'originalUrl')", CreateLinkField.DestinationUrl)]
+    [InlineData("The short code must be 4 to 12 ASCII letters or digits. (Parameter 'shortCode')", CreateLinkField.ShortCode)]
+    public async Task Api_validation_reason_identifies_the_field_without_echoing_it(string reason, CreateLinkField field)
+    {
+        var client = MakeClient(_ => Json(HttpStatusCode.BadRequest, System.Text.Json.JsonSerializer.Serialize(new { error = reason })));
+        var ex = await Assert.ThrowsAsync<ShortenerApiException>(() => client.CreateGuestAsync(new("https://example.com", "bad!")));
+        Assert.Equal(HttpStatusCode.BadRequest, ex.StatusCode);
+        Assert.Equal(field, ex.Field);
+        Assert.DoesNotContain(reason, ex.Message);
+    }
+
+    [Fact]
+    public async Task Unidentified_api_400_keeps_the_existing_generic_fallback()
+    {
+        var client = MakeClient(_ => Json(HttpStatusCode.BadRequest, "{\"error\":\"Unrelated error\"}"));
+        var ex = await Assert.ThrowsAsync<ShortenerApiException>(() => client.CreateGuestAsync(new("https://example.com", null)));
+        Assert.Null(ex.Field);
+        Assert.Equal("Check the destination URL (it must start with http:// or https://) and the custom code (4–12 letters or numbers, no spaces or symbols).", ex.Message);
+    }
+
     [Fact]
     public async Task Missing_api_address_is_actionable()
     {

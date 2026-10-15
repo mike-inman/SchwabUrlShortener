@@ -9,7 +9,9 @@
 @inject WorkspaceNavigationState WorkspaceNavigation
 @inject Shortener.Web.Services.LiveUpdates.ILinkChangeSubscriber LiveUpdates
 @inject IConfiguration Configuration
+@inject IJSRuntime JS
 @using Shortener.Application
+@using Microsoft.JSInterop
 
 <PageTitle>My links · @BrandText.TitleSuffix</PageTitle>
 @if (notice is not null)
@@ -41,15 +43,21 @@ else
         <h2>Create a managed link</h2>
         <EditForm Model="form" OnSubmit="CreateAsync" FormName="managed-link" class="link-form">
             <label for="managed-url">Destination URL</label>
-            <input id="managed-url" class="form-control" type="url" required placeholder="https://example.com/page" @bind="form.OriginalUrl" />
-            <label for="managed-code">Custom short code <span class="muted">(optional)</span></label>
-            <input id="managed-code" class="form-control" maxlength="64" @bind="form.ShortCode" />
+            <input id="managed-url" @ref="destinationInput" class="form-control" type="url" required pattern="https?://.+" title="@CreateLinkFormValidation.UrlMessage" placeholder="https://example.com/page" aria-invalid="@(fieldErrors.DestinationUrl is not null ? "true" : null)" aria-describedby="@(fieldErrors.DestinationUrl is not null ? "managed-url-browser-error managed-url-error" : "managed-url-browser-error")" @bind="form.OriginalUrl" />
+            <p id="managed-url-browser-error" class="field-error browser-validation" role="alert">@CreateLinkFormValidation.UrlMessage</p>
+            @if (fieldErrors.DestinationUrl is not null) { <p id="managed-url-error" class="field-error" role="alert">@fieldErrors.DestinationUrl</p> }
+            <label for="managed-code">Custom short code</label>
+            <input id="managed-code" class="form-control" pattern="[A-Za-z0-9]{4,12}" maxlength="12" title="@CreateLinkFormValidation.CodeMessage" aria-invalid="@(fieldErrors.ShortCode is not null ? "true" : null)" aria-describedby="@(fieldErrors.ShortCode is not null ? "managed-code-hint managed-code-browser-error managed-code-error" : "managed-code-hint managed-code-browser-error")" @bind="form.ShortCode" />
+            <p id="managed-code-hint" class="field-hint">4–12 letters or numbers (optional)</p>
+            <p id="managed-code-browser-error" class="field-error browser-validation" role="alert">@CreateLinkFormValidation.CodeMessage</p>
+            @if (fieldErrors.ShortCode is not null) { <p id="managed-code-error" class="field-error" role="alert">@fieldErrors.ShortCode</p> }
             <button class="btn btn-primary" type="submit" disabled="@busy">@(busy ? "Creating…" : "Create managed link")</button>
         </EditForm>
     </section>
 
     <section>
-        <div class="section-heading"><h2>Your links</h2><span class="muted">Updates automatically</span></div>
+        <div class="section-heading"><h2>Your links</h2></div>
+        <p class="muted">Times shown in @(viewerTimeAvailable ? viewerTimeZone.Id : "UTC (local time unavailable)").</p>
         @if (reauthRequired)
         {
             <p class="alert alert-warning" role="status">
@@ -78,7 +86,7 @@ else
                             <tr class="@(selected?.ShortCode == link.ShortCode ? "selected-link" : null)" aria-selected="@(selected?.ShortCode == link.ShortCode)">
                                 <td><a href="@Api.PublicUrl(link.ShortCode)" target="_blank" rel="noopener noreferrer">@link.ShortCode</a></td>
                                 <td class="destination">@link.OriginalUrl</td>
-                                <td>@link.CreatedAtUtc.ToLocalTime().ToString("g")</td>
+                                <td>@FormatViewerTime(link.CreatedAtUtc, "g")</td>
                                 <td>@link.HitCount</td>
                                 <td>
                                     @if (Identity.Customer && sparklines.TryGetValue(link.ShortCode, out var trend))
@@ -89,9 +97,9 @@ else
                                     }
                                     else { <span class="muted">—</span> }
                                 </td>
-                                <td>@(link.LastAccessedAtUtc?.ToLocalTime().ToString("g") ?? "Never")</td>
-                                <td><button class="btn btn-sm btn-outline-primary" disabled="@busy" aria-label="Details for @link.ShortCode" @onclick="() => ShowDetailsAsync(link.ShortCode)">Details</button>
-                                    @if (Identity.Customer) { <a class="btn btn-sm btn-outline-primary" href="@($"/dashboard/links/{Uri.EscapeDataString(link.ShortCode)}/insights")">Insights</a> }
+                                <td>@(link.LastAccessedAtUtc is { } accessed ? FormatViewerTime(accessed, "g") : "Never")</td>
+                                <td><div class="link-row-actions"><button class="btn btn-sm btn-outline-primary" disabled="@busy" aria-label="Details for @link.ShortCode" @onclick="() => ShowDetailsAsync(link.ShortCode)">Details</button>
+                                    @if (Identity.Customer) { <a class="btn btn-sm btn-outline-primary" href="@($"/dashboard/links/{Uri.EscapeDataString(link.ShortCode)}/insights")">Insights</a> }</div>
                                 </td>
                             </tr>
                         }
@@ -106,7 +114,7 @@ else
             <h2>Details for <a href="@Api.PublicUrl(selected.ShortCode)" target="_blank" rel="noopener noreferrer">@selected.ShortCode</a></h2>
             <p>Destination: @selected.OriginalUrl</p>
             <p>Redirects: @selected.HitCount</p>
-            <p>Last accessed: @(selected.LastAccessedAtUtc?.ToLocalTime().ToString("f") ?? "Never")</p>
+            <p>Last accessed: @(selected.LastAccessedAtUtc is { } accessed ? FormatViewerTime(accessed, "f") : "Never")</p>
         </section>
     }
 }
@@ -115,6 +123,12 @@ else
     [SupplyParameterFromQuery(Name = "reauth")] private string? Reauth { get; set; }
     [CascadingParameter] private Task<AuthenticationState> AuthenticationState { get; set; } = default!;
     private readonly LinkForm form = new();
+    private CreateLinkFormErrors fieldErrors = new();
+    private ElementReference destinationInput;
+    private bool focusDestination;
+    private IJSObjectReference? timeModule;
+    private TimeZoneInfo viewerTimeZone = TimeZoneInfo.Utc;
+    private bool viewerTimeAvailable;
     private IReadOnlyList<ManagedLink>? links;
     private Dictionary<string, IReadOnlyList<InsightPoint>> sparklines = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<WorkspaceSummary>? workspaces;
@@ -142,6 +156,31 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender)
+        {
+            try
+            {
+                timeModule = await JS.InvokeAsync<IJSObjectReference>("import", "./insights.js");
+                var preferences = await timeModule.InvokeAsync<ViewerPreferences>("viewerPreferences");
+                if (preferences is not null)
+                {
+                    try
+                    {
+                        viewerTimeZone = TimeZoneInfo.FindSystemTimeZoneById(preferences.TimeZone);
+                        viewerTimeAvailable = true;
+                    }
+                    catch (TimeZoneNotFoundException) { viewerTimeZone = TimeZoneInfo.Utc; }
+                    catch (InvalidTimeZoneException) { viewerTimeZone = TimeZoneInfo.Utc; }
+                }
+                StateHasChanged();
+            }
+            catch (JSException ex) { Logger.LogWarning("Dashboard browser time zone unavailable. ExceptionType={ExceptionType}", ex.GetType().Name); }
+        }
+        if (focusDestination)
+        {
+            focusDestination = false;
+            await destinationInput.FocusAsync();
+        }
         if (Reauth == "1" && !reauthRequired && !renewalReturnCleared)
         {
             renewalReturnCleared = true;
@@ -272,6 +311,7 @@ else
         liveCancellation.Dispose();
         noticeCancellation?.Cancel();
         noticeCancellation?.Dispose();
+        if (timeModule is not null) await timeModule.DisposeAsync();
     }
 
     private async Task LoadAsync()
@@ -297,23 +337,33 @@ else
 
     private async Task CreateAsync()
     {
-        busy = true;
         error = null;
+        fieldErrors = CreateLinkFormValidation.Validate(form.OriginalUrl, form.ShortCode);
+        if (fieldErrors.HasErrors) return;
+        busy = true;
         try
         {
             var user = (await AuthenticationState).User;
-            var request = new CreateLinkRequest(form.OriginalUrl, string.IsNullOrWhiteSpace(form.ShortCode) ? null : form.ShortCode.Trim());
+            var request = new CreateLinkRequest(form.OriginalUrl, string.IsNullOrEmpty(form.ShortCode) ? null : form.ShortCode);
             var result = Identity.Customer
                 ? await Api.CreateWorkspaceManagedAsync(workspaceId!.Value, request, user)
                 : await Api.CreateManagedAsync(request, user);
-            links = await GetLinksAsync(user);
-            if (Identity.Customer) await LoadSparklinesAsync(user);
-            selected = links.FirstOrDefault(link => link.ShortCode == result.Link.ShortCode);
+            form.OriginalUrl = "";
+            form.ShortCode = null;
+            focusDestination = true;
             ShowNotice(result.AlreadyExists ? "Link already exists" : "Link created",
                 result.AlreadyExists ? "You already have short link " : "Short link ",
                 result.Link.ShortCode,
                 result.AlreadyExists ? "." : " is ready.",
                 result.AlreadyExists ? "notice-info" : "notice-success");
+            links = await GetLinksAsync(user);
+            if (Identity.Customer) await LoadSparklinesAsync(user);
+            selected = links.FirstOrDefault(link => link.ShortCode == result.Link.ShortCode);
+        }
+        catch (ShortenerApiException ex)
+        {
+            fieldErrors = CreateLinkFormValidation.FromApi(ex);
+            if (!fieldErrors.HasErrors) HandleFailure(ex, "create managed link");
         }
         catch (Exception ex) { HandleFailure(ex, "create managed link"); }
         finally { busy = false; }
@@ -385,6 +435,10 @@ else
         return string.Join(" ", trend.Select((x, index) =>
             $"{4 + index * 112.0 / Math.Max(1, trend.Count - 1):0.#},{30 - x.Clicks * 26.0 / max:0.#}"));
     }
+
+    private string FormatViewerTime(DateTimeOffset utc, string format) =>
+        TimeZoneInfo.ConvertTime(utc, viewerTimeZone).ToString(format);
+
 
     private void ShowNotice(string title, string messagePrefix, string shortCode, string messageSuffix, string kind)
     {

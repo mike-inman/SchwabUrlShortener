@@ -191,6 +191,8 @@ public sealed class ShortenerApiClient : IShortenerApiClient
             {
                 _logger.LogWarning("Shortener API rejected {Operation}. StatusCode={StatusCode} CorrelationId={CorrelationId}",
                     operation, (int)response.StatusCode, System.Diagnostics.Activity.Current?.Id);
+                var field = response.StatusCode == HttpStatusCode.BadRequest
+                    ? await ReadValidationFieldAsync(response.Content, cancellationToken) : null;
                 throw new ShortenerApiException(response.StatusCode switch
                 {
                     HttpStatusCode.BadRequest => "Check the destination URL (it must start with http:// or https://) and the custom code (4–12 letters or numbers, no spaces or symbols).",
@@ -198,7 +200,7 @@ public sealed class ShortenerApiClient : IShortenerApiClient
                     HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => "Your managed-link access was denied. Sign in again or contact an administrator.",
                     HttpStatusCode.NotFound => "That managed link was not found in your tenant.",
                     _ => "The shortener API could not complete the request. Try again later."
-                });
+                }, response.StatusCode, field);
             }
             var value = await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
             return (value ?? throw new JsonException("Empty API response"), response.StatusCode);
@@ -216,6 +218,31 @@ public sealed class ShortenerApiClient : IShortenerApiClient
             throw new ShortenerApiException("The shortener API returned an invalid response. Try again later.");
         }
     }
+
+    private static async Task<CreateLinkField?> ReadValidationFieldAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = await content.ReadAsStreamAsync(cancellationToken);
+            using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            if (!json.RootElement.TryGetProperty("error", out var property) || property.ValueKind != JsonValueKind.String)
+                return null;
+            var reason = property.GetString();
+            if (reason?.Contains("originalUrl", StringComparison.OrdinalIgnoreCase) == true ||
+                reason?.Contains("Original URL", StringComparison.OrdinalIgnoreCase) == true)
+                return CreateLinkField.DestinationUrl;
+            if (reason?.Contains("shortCode", StringComparison.OrdinalIgnoreCase) == true ||
+                reason?.Contains("short code", StringComparison.OrdinalIgnoreCase) == true)
+                return CreateLinkField.ShortCode;
+        }
+        catch (JsonException) { }
+        return null;
+    }
 }
 
-public sealed class ShortenerApiException(string message) : Exception(message);
+public sealed class ShortenerApiException(string message, HttpStatusCode? statusCode = null, CreateLinkField? field = null)
+    : Exception(message)
+{
+    public HttpStatusCode? StatusCode { get; } = statusCode;
+    public CreateLinkField? Field { get; } = field;
+}

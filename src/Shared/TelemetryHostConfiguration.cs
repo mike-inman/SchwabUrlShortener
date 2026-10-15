@@ -31,7 +31,7 @@ public static class TelemetryHostConfiguration
             })
             .WithMetrics(metrics =>
             {
-                metrics.AddMeter("Shortener.ClickAnalytics", "Shortener.LiveUpdates", "Shortener.RateLimiting");
+                metrics.AddMeter("Shortener.ClickAnalytics", "Shortener.LiveUpdates", "Shortener.RateLimiting", "Shortener.Contact");
                 if (console) metrics.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation().AddConsoleExporter();
             });
         if (azure)
