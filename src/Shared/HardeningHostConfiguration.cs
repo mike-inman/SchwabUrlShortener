@@ -137,6 +137,7 @@ public static class HardeningHostConfiguration
         foreach (var key in new[] { "AzureAd:Authority", "AzureAd:Instance" })
             if (Uri.TryCreate(configuration[key], UriKind.Absolute, out var authority) && authority.Scheme == "https")
                 formOrigins.Add(authority.GetLeftPart(UriPartial.Authority));
+        var identityOrigins = formOrigins.Count == 0 ? "" : " " + string.Join(' ', formOrigins);
         return app.Use(async (context, next) =>
         {
             var nonce = web ? Convert.ToBase64String(RandomNumberGenerator.GetBytes(16)) : null;
@@ -145,8 +146,7 @@ public static class HardeningHostConfiguration
                 ? "default-src 'self'; script-src 'self' 'nonce-" + nonce + "'; " +
                   "style-src 'self' 'unsafe-inline'; " +
                   "font-src 'self'; img-src 'self' data:; " +
-                  "connect-src 'self' wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" +
-                  (formOrigins.Count == 0 ? "" : " " + string.Join(' ', formOrigins))
+                  "connect-src 'self' wss:" + identityOrigins + "; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" + identityOrigins
                 : "frame-ancestors 'none'";
             context.Response.OnStarting(() =>
             {

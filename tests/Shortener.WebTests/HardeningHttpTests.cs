@@ -57,7 +57,8 @@ public sealed class HardeningHttpTests
         using var response = await client.GetAsync("/");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var csp = response.Headers.GetValues("Content-Security-Policy").Single();
-        Assert.Contains("connect-src 'self' wss:", csp);
+        Assert.Contains("connect-src 'self' wss:;", csp);
+        Assert.Contains("form-action 'self'", csp);
         Assert.Contains("frame-ancestors 'none'", csp);
         Assert.Contains("script-src 'self' 'nonce-", csp);
         Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
@@ -76,6 +77,21 @@ public sealed class HardeningHttpTests
         Assert.Contains("/contact", privacyHtml);
         using var font = await client.GetAsync("/fonts/BricolageGrotesque.ttf");
         Assert.Equal(HttpStatusCode.OK, font.StatusCode);
+    }
+
+    [Fact]
+    public async Task Web_csp_allows_only_configured_https_identity_origin_for_navigation_fallback()
+    {
+        using var factory = new WebFactory("https://login.example.test/tenant/v2.0");
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://example.test"), AllowAutoRedirect = false
+        });
+        using var response = await client.GetAsync("/");
+        var csp = response.Headers.GetValues("Content-Security-Policy").Single();
+        Assert.Contains("connect-src 'self' wss: https://login.example.test;", csp);
+        Assert.Contains("form-action 'self' https://login.example.test", csp);
+        Assert.DoesNotContain("login.example.test/tenant", csp);
     }
 
     [Fact]
@@ -119,7 +135,7 @@ public sealed class HardeningHttpTests
         Assert.True(rejected.Headers.TryGetValues("Retry-After", out _));
     }
 
-    private sealed class WebFactory : WebApplicationFactory<SignedOut>
+    private sealed class WebFactory(string? authority = null) : WebApplicationFactory<SignedOut>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -127,6 +143,7 @@ public sealed class HardeningHttpTests
             builder.UseSetting("ConnectionStrings:Redis", "127.0.0.1:1");
             builder.UseSetting("PublicLinks:BaseUrl", "https://example.test/");
             builder.UseSetting("RateLimiting:GuestCreate:PermitLimit", "1");
+            if (authority is not null) builder.UseSetting("AzureAd:Authority", authority);
         }
     }
 }
