@@ -579,9 +579,10 @@ public sealed class ComponentTests : BunitContext
             return Task.FromResult(new LinkInsights(0, 0, 0, [], [], [], null, []));
         };
         JSInterop.Mode = JSRuntimeMode.Loose;
+        JSInterop.SetupModule("./insights.js");
         var view = Render<Insights>(parameters => parameters.Add(x => x.ShortCode, "abc"));
-        view.WaitForAssertion(() => Assert.Contains("No clicks yet", view.Markup));
-        view.WaitForAssertion(() => Assert.Contains("No clicks in the last 28 days", view.Markup));
+        Assert.Contains("No clicks yet", view.Markup);
+        Assert.Contains("No clicks in the last 28 days", view.Markup);
         var emptyOptions = (ApexChartBaseOptions)typeof(Insights).GetField("heatOptions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view.Instance)!;
         Assert.Single(emptyOptions.PlotOptions!.Heatmap!.ColorScale!.Ranges!);
         Assert.Equal("#1E2C44", emptyOptions.PlotOptions.Heatmap.ColorScale.Ranges[0].Color);
@@ -640,11 +641,16 @@ public sealed class ComponentTests : BunitContext
         var heatmap = options.PlotOptions!.Heatmap!;
         Assert.False(heatmap.Distributed);
         Assert.False(options.DataLabels!.Enabled);
+        Assert.Null(options.Tooltip?.Custom);
         Assert.Equal("#1E2C44", heatmap.ColorScale!.Ranges![0].Color);
         Assert.Equal("#59E6CF", heatmap.ColorScale.Ranges[^1].Color);
         Assert.Equal(3, heatmap.ColorScale.Ranges[^1].To);
         var seriesOrder = (string[])typeof(Insights).GetField("HeatSeriesOrder", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
         Assert.Equal(new[] { "Sun", "Sat", "Fri", "Thu", "Wed", "Tue", "Mon" }, seriesOrder);
+        var cellType = typeof(Insights).GetNestedType("HeatCell", BindingFlags.NonPublic)!;
+        var tooltip = typeof(Insights).GetMethod("HeatTooltip", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Assert.Equal("Tue 3p · 4 clicks", tooltip.Invoke(null, [Activator.CreateInstance(cellType, "Tue", "3p", 4L)]));
+        Assert.Equal("Tue 3p · 1 click", tooltip.Invoke(null, [Activator.CreateInstance(cellType, "Tue", "3p", 1L)]));
         Assert.Contains("clicks across the last 28 days", view.Markup);
     }
 

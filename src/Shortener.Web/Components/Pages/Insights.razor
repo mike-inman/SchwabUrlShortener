@@ -77,11 +77,19 @@
             <section class="insights-panel" aria-labelledby="insights-heat-heading">
                 <div class="insights-panel-head"><h2 id="insights-heat-heading">When your audience clicks</h2><span>Weekday and hour, your local time</span></div>
                 <ApexChart TItem="HeatCell" @ref="heatChart" Options="heatOptions" Height="300">
-                    @foreach (var day in HeatSeriesOrder)
-                    {
-                        <ApexPointSeries TItem="HeatCell" Items="heatCells.Where(x => x.Weekday == day).ToArray()" Name="@day"
-                            SeriesType="SeriesType.Heatmap" XValue="p => p.HourLabel" YValue="p => p.Clicks" />
-                    }
+                    <ApexPointTooltip Context="hover">
+                        @if (hover.DataPoint.Items.FirstOrDefault() is { } cell)
+                        {
+                            <div>@HeatTooltip(cell)</div>
+                        }
+                    </ApexPointTooltip>
+                    <ChildContent>
+                        @foreach (var day in HeatSeriesOrder)
+                        {
+                            <ApexPointSeries TItem="HeatCell" Items="heatCells.Where(x => x.Weekday == day).ToArray()" Name="@day"
+                                SeriesType="SeriesType.Heatmap" XValue="p => p.HourLabel" YValue="p => p.Clicks" />
+                        }
+                    </ChildContent>
                 </ApexChart>
                 @if (heatCells.All(x => x.Clicks == 0)) { <p class="insights-empty">No clicks in the last 28 days.</p> }
                 <p class="visually-hidden">@HeatSummary()</p>

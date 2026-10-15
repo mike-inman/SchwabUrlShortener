@@ -171,6 +171,8 @@ public partial class Insights
     private string HeatSummary() => heatCells.Count == 0 || heatCells.All(x => x.Clicks == 0)
         ? "No clicks in the last 28 days."
         : $"Busiest hour: {BusiestHour(data!)}. {heatCells.Sum(x => x.Clicks)} clicks across the last 28 days.";
+    private static string HeatTooltip(HeatCell cell) =>
+        $"{cell.Weekday} {cell.HourLabel} · {cell.Clicks} {(cell.Clicks == 1 ? "click" : "clicks")}";
     private IReadOnlyList<HeatCell> BuildHeat(LinkInsights value)
     {
         var counts = InsightsTime.ByLocalWeekdayHour(value.HeatmapHours, timeZone);
@@ -188,7 +190,6 @@ public partial class Insights
             PlotOptions = new() { Pie = new() { Donut = new() { Size = "72%" } } }, Theme = new() { Mode = Mode.Dark } };
         heatOptions = new() { Chart = Chart(300), Colors = ["#59E6CF"], Theme = new() { Mode = Mode.Dark },
             DataLabels = new() { Enabled = false },
-            Tooltip = new() { Custom = "function({series, seriesIndex, dataPointIndex, w}) { const day = w.config.series[seriesIndex].name; const hour = w.config.series[seriesIndex].data[dataPointIndex].x; const clicks = series[seriesIndex][dataPointIndex]; return '<div class=\"apexcharts-tooltip-title\">' + day + ' ' + hour + ' · ' + clicks + ' ' + (clicks === 1 ? 'click' : 'clicks') + '</div>'; }" },
             PlotOptions = new() { Heatmap = new() { Radius = 4, EnableShades = false, Distributed = false,
                 ColorScale = HeatColorScale(heatCells) } } };
     }
