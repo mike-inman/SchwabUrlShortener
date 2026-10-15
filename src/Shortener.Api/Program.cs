@@ -85,6 +85,8 @@ if (!string.IsNullOrWhiteSpace(identityMode) &&
     !string.Equals(identityMode, "Workforce", StringComparison.OrdinalIgnoreCase))
     throw new InvalidOperationException("Identity:Mode must be Customer or Workforce.");
 var customerIdentity = string.Equals(identityMode, "Customer", StringComparison.OrdinalIgnoreCase);
+var contactInboxAdmin = new ContactInboxAdmin(builder.Configuration);
+builder.Services.AddSingleton(contactInboxAdmin);
 if (customerIdentity)
 {
     var instance = builder.Configuration["AzureAd:Instance"];
@@ -141,6 +143,10 @@ builder.Services.AddAuthorization(options =>
     else
         policy.RequireScope("access_as_user");
     options.DefaultPolicy = policy.Build();
+    options.AddPolicy(ContactInboxAdmin.Policy, new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .Combine(options.DefaultPolicy)
+        .RequireAssertion(context => contactInboxAdmin.IsAdmin(context.User))
+        .Build());
 });
 
 var app = builder.Build();
@@ -184,6 +190,7 @@ app.Lifetime.ApplicationStopping.Register(() => app.Logger.LogInformation("Servi
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false }).AllowAnonymous();
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") }).AllowAnonymous();
 app.MapContactEndpoints();
+app.MapContactAdminEndpoints();
 
 app.MapGet("/api/me/workspaces", async (ClaimsPrincipal principal, HttpContext context,
     PostgresCustomerWorkspaces workspaces, CancellationToken cancellationToken) =>

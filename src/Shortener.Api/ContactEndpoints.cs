@@ -54,6 +54,8 @@ public static class ContactEndpoints
             await db.SaveChangesAsync(cancellationToken);
             ContactMetrics.Received.Add(1);
             logger.LogInformation("Contact received. MessageId={MessageId}", message.Id);
+            await context.RequestServices.GetRequiredService<ILinkChangePublisher>()
+                .PublishAsync(ContactInboxHint.Change, cancellationToken);
             return Results.Created("/api/contact/" + message.Id.ToString("N"), new ContactReceipt(message.Id));
         }).AllowAnonymous().RequireRateLimiting(HardeningHostConfiguration.ContactPolicy);
     }

@@ -17,6 +17,7 @@
         <AuthorizeView>
             <Authorized>
                 <NavLink href="/dashboard">Managed links</NavLink>
+                <ContactAdminNav />
                 <form method="post" action="/account/signout"><AntiforgeryToken /><button class="nav-button" type="submit">Sign out</button></form>
             </Authorized>
             <NotAuthorized><a href="/account/signin">Sign in</a></NotAuthorized>

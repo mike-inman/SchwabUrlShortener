@@ -150,6 +150,11 @@ main.container { max-width: 1120px; padding-top: 3rem; padding-bottom: 5rem; fle
 #managed-url:user-invalid ~ #managed-url-browser-error,
 #managed-code:user-invalid ~ #managed-code-browser-error { display: block; }
 .field-hint { color: var(--zl-muted); font-size: .875rem; margin: 0; }
+.inbox-count { display: inline-block; min-width: 1.5em; text-align: center; border-radius: 1em; background: #184b55; color: #e8fff9; padding: 0 .35em; }
+.contact-inbox { display: grid; gap: 1rem; margin: 1rem 0; }
+.inbox-message { border: 1px solid #40526d; border-radius: .75rem; padding: 1.25rem; background: #111e33; }
+.inbox-message h2 { font-size: 1.2rem; }
+.inbox-message-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .workspace-caption { margin: .35rem 0 .75rem; font-size: .875rem; }
 .signed-out-panel { max-width: 680px; padding: 2rem; }
 .signed-out-panel h1 { margin: 1rem 0; }

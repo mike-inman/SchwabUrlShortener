@@ -86,6 +86,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<WorkspaceNavigationState>();
 builder.Services.AddApexCharts();
 builder.Services.AddHttpClient<IShortenerApiClient, ShortenerApiClient>();
+builder.Services.AddHttpClient<IContactInboxApiClient, ContactInboxApiClient>();
 builder.Services.AddHttpClient<ContactApiClient>();
 builder.Services.AddHttpClient("availability", client => client.Timeout = TimeSpan.FromSeconds(3));
 builder.Services.AddRazorComponents()
