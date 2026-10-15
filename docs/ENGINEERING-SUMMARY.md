@@ -164,7 +164,6 @@ I used two AI coding agents. **Claude** (Anthropic) handled planning, architectu
 | 10-13 | Move DNS to Azure DNS | **Rejected (by me)** | DNS stays at the registrar (GoDaddy). Only the A and TXT validation records were added. |
 | 10-14 | Serve short links at the root (`ziplio.io/<code>`) | **Rejected (by me)** | Kept `/r/<code>` to avoid collisions with app routes and to keep proxy routing simple. |
 | 10-14 | Track D hardening (rate limits, CSP, OpenTelemetry, non-root) | **Accepted after review** | 126 tests passed, along with a 5-way Compose startup matrix ([validation](2026-10-14-0825-track-d-application-hardening-validation.md)). |
-| 10-14 | CSP `connect-src` blocked Blazor's enhanced-navigation fallback for the external sign-in redirect | **Fixed in Track H** | Allowed the configured IdP origin in `connect-src`; configured and unconfigured CSP tests cover the header. |
 
 ### Quality gates applied to AI output
 
