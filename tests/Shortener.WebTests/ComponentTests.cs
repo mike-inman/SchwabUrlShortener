@@ -654,6 +654,22 @@ public sealed class ComponentTests : BunitContext
         Assert.Contains("clicks across the last 28 days", view.Markup);
     }
 
+    [Fact]
+    public void Insights_heatmap_color_ranges_do_not_overflow_for_large_counts()
+    {
+        var cellType = typeof(Insights).GetNestedType("HeatCell", BindingFlags.NonPublic)!;
+        var cells = Array.CreateInstance(cellType, 1);
+        cells.SetValue(Activator.CreateInstance(cellType, "Tue", "3p", long.MaxValue), 0);
+        var scale = (PlotOptionsHeatmapColorScale)typeof(Insights)
+            .GetMethod("HeatColorScale", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, [cells])!;
+
+        Assert.Equal(0, scale.Ranges![0].To);
+        Assert.Equal(long.MaxValue, scale.Ranges[^1].To);
+        for (var index = 1; index < scale.Ranges.Count; index++)
+            Assert.Equal(scale.Ranges[index - 1].To + 1, scale.Ranges[index].From);
+    }
+
     private FakeApi Setup(bool customer = false)
     {
         JSInterop.Mode = JSRuntimeMode.Loose;

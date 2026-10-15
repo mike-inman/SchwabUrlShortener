@@ -204,7 +204,7 @@ public partial class Insights
         var from = 1L;
         for (var level = 1; level <= 4 && from <= max; level++)
         {
-            var to = Math.Max(from, (long)Math.Ceiling(max * level / 4.0));
+            var to = Math.Max(from, max / 4 * level + (max % 4 * level + 3) / 4);
             var colorIndex = (int)Math.Ceiling(to * 4.0 / max) - 1;
             ranges.Add(new() { From = from, To = to, Name = $"{from}–{to} clicks", Color = colors[colorIndex] });
             if (to == max) break;
