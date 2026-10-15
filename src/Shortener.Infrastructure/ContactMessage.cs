@@ -14,4 +14,5 @@ public sealed class ContactMessage
     public DateTimeOffset NextAttemptAtUtc { get; set; }
     public int NotificationAttempts { get; set; }
     public string? LastNotificationErrorCode { get; set; }
+    public DateTimeOffset? HandledAtUtc { get; set; }
 }

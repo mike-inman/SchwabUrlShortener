@@ -631,11 +631,13 @@ public sealed class ComponentTests : BunitContext
         JSInterop.Mode = JSRuntimeMode.Loose;
         var api = new FakeApi();
         Services.AddSingleton<IShortenerApiClient>(api);
+        Services.AddSingleton<IContactInboxApiClient>(new NonAdminInboxApi());
         Services.AddSingleton(new IdentityAvailability(true, customer));
         Services.AddSingleton(new WorkspaceNavigationState());
         Services.AddSingleton(NullLogger<Home>.Instance);
         Services.AddSingleton(NullLogger<Dashboard>.Instance);
         Services.AddSingleton(NullLogger<Insights>.Instance);
+        Services.AddSingleton(NullLogger<ContactAdminNav>.Instance);
         Services.AddSingleton<ILinkChangeSubscriber>(liveUpdates);
         Services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?> { ["LiveUpdates:DebounceMilliseconds"] = "100" }).Build());
@@ -702,5 +704,15 @@ public sealed class ComponentTests : BunitContext
         public Task<IReadOnlyList<LinkSparkline>> GetWorkspaceSparklinesAsync(Guid workspaceId, int days, ClaimsPrincipal user, CancellationToken cancellationToken = default)
         { Assert.True(user.Identity?.IsAuthenticated); SparklineReads.Add(workspaceId); return Sparklines(workspaceId); }
         public Uri PublicUrl(string shortCode) => new("https://api.example.test/r/" + shortCode);
+    }
+
+    private sealed class NonAdminInboxApi : IContactInboxApiClient
+    {
+        public Task<ContactAdminInfo> GetInfoAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ContactAdminInfo(false, 0));
+        public Task<ContactMessagePage> GetPageAsync(ClaimsPrincipal user, string? cursor = null,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task MarkHandledAsync(ClaimsPrincipal user, Guid id, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 }

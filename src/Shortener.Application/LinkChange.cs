@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Shortener.Application;
 
-public enum LinkChangeScope { Tenant, Workspace }
+public enum LinkChangeScope { Tenant, Workspace, Admin }
 
 public sealed record LinkChange(LinkChangeScope Scope, Guid ScopeId, string ShortCode)
 {
@@ -15,7 +15,8 @@ public sealed record LinkChange(LinkChangeScope Scope, Guid ScopeId, string Shor
     };
 
     public string Serialize() => JsonSerializer.Serialize(new Payload(1,
-        Scope == LinkChangeScope.Tenant ? "tenant" : "workspace", ScopeId, ShortCode), JsonOptions);
+        Scope switch { LinkChangeScope.Tenant => "tenant", LinkChangeScope.Workspace => "workspace", _ => "admin" },
+        ScopeId, ShortCode), JsonOptions);
 
     public static bool TryDeserialize(string json, out LinkChange? change)
     {
@@ -31,6 +32,7 @@ public sealed record LinkChange(LinkChangeScope Scope, Guid ScopeId, string Shor
             {
                 "tenant" => LinkChangeScope.Tenant,
                 "workspace" => LinkChangeScope.Workspace,
+                "admin" => LinkChangeScope.Admin,
                 _ => (LinkChangeScope?)null
             };
             var code = root.GetProperty("shortCode").GetString();

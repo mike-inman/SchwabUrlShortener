@@ -1,0 +1,79 @@
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@inject IContactInboxApiClient Inbox
+@inject Shortener.Web.Services.LiveUpdates.ILinkChangeSubscriber LiveUpdates
+@inject IConfiguration Configuration
+@inject ILogger<ContactAdminNav> Logger
+@using Shortener.Application
+
+@if (isAdmin)
+{
+    <NavLink href="/admin/messages">Messages <span class="inbox-count">@unhandledCount</span></NavLink>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthenticationState { get; set; } = default!;
+    private readonly CancellationTokenSource lifetime = new();
+    private IDisposable? subscription;
+    private CancellationTokenSource? pending;
+    private bool isAdmin;
+    private int unhandledCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { await RefreshAsync(); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The link stays hidden when the API or delegated token is unavailable.
+            Logger.LogWarning("Contact inbox navigation unavailable. ExceptionType={ExceptionType}", ex.GetType().Name);
+        }
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (isAdmin && subscription is null)
+            subscription = LiveUpdates.Subscribe(LinkChangeScope.Admin, ContactInboxHint.ScopeId,
+                () => InvokeAsync(QueueRefresh));
+        return Task.CompletedTask;
+    }
+
+    private async Task RefreshAsync()
+    {
+        var user = (await AuthenticationState).User;
+        var info = await Inbox.GetInfoAsync(user, lifetime.Token);
+        isAdmin = info.IsContactAdmin;
+        unhandledCount = info.UnhandledContactCount;
+        StateHasChanged();
+    }
+
+    private void QueueRefresh()
+    {
+        if (lifetime.IsCancellationRequested || pending is not null) return;
+        pending = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        _ = RefreshAfterHintAsync(pending);
+    }
+
+    private async Task RefreshAfterHintAsync(CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(int.Parse(Configuration["LiveUpdates:DebounceMilliseconds"]!), cancellation.Token);
+            await InvokeAsync(RefreshAsync);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning("Contact inbox count refresh failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+        }
+        finally { if (ReferenceEquals(pending, cancellation)) pending = null; cancellation.Dispose(); }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        subscription?.Dispose();
+        lifetime.Cancel();
+        pending?.Cancel();
+        lifetime.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

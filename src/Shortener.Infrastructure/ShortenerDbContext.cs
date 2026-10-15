@@ -32,8 +32,10 @@ public sealed class ShortenerDbContext(DbContextOptions<ShortenerDbContext> opti
             entity.Property(x => x.NextAttemptAtUtc).HasColumnName("next_attempt_at_utc");
             entity.Property(x => x.NotificationAttempts).HasColumnName("notification_attempts");
             entity.Property(x => x.LastNotificationErrorCode).HasColumnName("last_notification_error_code").HasMaxLength(100);
+            entity.Property(x => x.HandledAtUtc).HasColumnName("handled_at_utc");
             entity.HasIndex(x => new { x.NextAttemptAtUtc, x.CreatedAtUtc }).HasDatabaseName("ix_contact_messages_notification_pending")
                 .HasFilter("notified_at_utc IS NULL AND failed_at_utc IS NULL");
+            entity.HasIndex(x => new { x.CreatedAtUtc, x.Id }).IsDescending(true, true).HasDatabaseName("ix_contact_messages_inbox_order");
         });
         modelBuilder.Entity<UrlMapping>(entity =>
         {

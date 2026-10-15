@@ -8,6 +8,8 @@ param analyticsImage string
 param redisImage string
 param apiClientId string
 param webClientId string
+@secure()
+param contactAdminSubject string = ''
 param enableScaleOutSettings bool = true
 param customDomain string = 'ziplio.io'
 
@@ -74,6 +76,10 @@ var vaultBase = 'https://${vault.name}.vault.azure.net/secrets/'
 var dpBlobBase = 'https://${dpStorage.name}.blob.core.windows.net/dataprotection/'
 var dpKeyBase = 'https://${vault.name}.vault.azure.net/keys/'
 var commonIdentityEnv = 'Customer'
+// Exact `iss|sub` from the validated API access token. Empty means no contact inbox admin.
+var contactAdminEnv = empty(contactAdminSubject) ? [] : [
+  { name: 'Admin__Subjects__0', value: contactAdminSubject }
+]
 var secretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var appInsightsEnv = [ { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights.properties.ConnectionString } ]
 
@@ -167,7 +173,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
           { name: 'AzureAd__ClientId', value: apiClientId }
           { name: 'AllowedHosts', value: 'ca-shortener-api.${environment.properties.defaultDomain};ca-shortener-api;${routeHost};${publicHost};www.ziplio.io' }
           { name: 'PublicLinks__BaseUrl', value: 'https://${publicHost}/' }
-        ], apiScaleEnv, appInsightsEnv)
+        ], contactAdminEnv, apiScaleEnv, appInsightsEnv)
         resources: { cpu: json('0.25'), memory: '0.5Gi' }
         probes: [
           { type: 'Liveness', httpGet: { path: '/health/live', port: 8080, httpHeaders: [ { name: 'Host', value: 'ca-shortener-api.${environment.properties.defaultDomain}' } ] }, initialDelaySeconds: 10, periodSeconds: 15 }

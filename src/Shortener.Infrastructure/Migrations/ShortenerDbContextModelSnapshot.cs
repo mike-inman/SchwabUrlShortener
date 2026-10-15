@@ -144,6 +144,10 @@ namespace Shortener.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("failed_at_utc");
 
+                    b.Property<DateTimeOffset?>("HandledAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("handled_at_utc");
+
                     b.Property<string>("LastNotificationErrorCode")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)")
@@ -179,6 +183,10 @@ namespace Shortener.Infrastructure.Migrations
                         .HasColumnName("subject");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CreatedAtUtc", "Id")
+                        .IsDescending(true, true)
+                        .HasDatabaseName("ix_contact_messages_inbox_order");
 
                     b.HasIndex("NextAttemptAtUtc", "CreatedAtUtc")
                         .HasDatabaseName("ix_contact_messages_notification_pending")

@@ -1,0 +1,214 @@
+@page "/admin/messages"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@implements IAsyncDisposable
+@inject IContactInboxApiClient Inbox
+@inject Shortener.Web.Services.LiveUpdates.ILinkChangeSubscriber LiveUpdates
+@inject IConfiguration Configuration
+@inject IJSRuntime JS
+@inject ILogger<ContactMessages> Logger
+@using Shortener.Application
+@using Shortener.Web.Services.LiveUpdates
+
+<PageTitle>Messages · @BrandText.TitleSuffix</PageTitle>
+<h1>Contact messages</h1>
+@if (loading)
+{
+    <p role="status">Loading messages…</p>
+}
+else if (error is not null && !isAdmin)
+{
+    <p class="alert alert-danger" role="alert">@error</p>
+}
+else if (!isAdmin)
+{
+    <p role="alert">You do not have access to contact messages.</p>
+}
+else
+{
+    <p class="muted">@unhandledCount unhandled · Times shown in @(localTimeAvailable ? timeZone.Id : "UTC (local time unavailable)").</p>
+    @if (error is not null) { <p class="alert alert-danger" role="alert">@error</p> }
+    @if (liveUpdateError) { <p class="alert alert-warning" role="status">Live updates are temporarily unavailable. Reconnecting automatically.</p> }
+    @if (messages.Count == 0) { <p>No contact messages yet.</p> }
+    else
+    {
+        <div class="contact-inbox">
+            @foreach (var item in messages)
+            {
+                <article class="inbox-message" aria-labelledby="@($"message-{item.Id:N}")">
+                    <header>
+                        <h2 id="@($"message-{item.Id:N}")">@(item.Subject ?? "Contact message")</h2>
+                        <p><strong>@item.Name</strong> · <a href="@(Mailto(item.Email))">@item.Email</a></p>
+                        <p class="muted">Received @FormatTime(item.CreatedAtUtc) · Notification: @NotificationStatus(item)</p>
+                    </header>
+                    <p class="inbox-message-body">@item.Message</p>
+                    @if (item.HandledAtUtc is { } handled)
+                    {
+                        <p class="muted">Handled @FormatTime(handled)</p>
+                    }
+                    else
+                    {
+                        <button class="btn btn-outline-primary" type="button" disabled="@marking" @onclick="() => MarkHandledAsync(item.Id)">Mark handled</button>
+                    }
+                </article>
+            }
+        </div>
+        @if (nextCursor is not null)
+        {
+            <button class="btn btn-outline-primary" type="button" disabled="@loadingMore" @onclick="LoadMoreAsync">@(loadingMore ? "Loading…" : "Load older messages")</button>
+        }
+    }
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthenticationState { get; set; } = default!;
+    private readonly CancellationTokenSource lifetime = new();
+    private readonly List<ContactMessageItem> messages = [];
+    private IDisposable? subscription;
+    private CancellationTokenSource? pending;
+    private IJSObjectReference? timeModule;
+    private TimeZoneInfo timeZone = TimeZoneInfo.Utc;
+    private bool localTimeAvailable;
+    private bool isAdmin;
+    private bool loading = true;
+    private bool loadingMore;
+    private bool marking;
+    private bool liveUpdateError;
+    private int unhandledCount;
+    private string? nextCursor;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var user = (await AuthenticationState).User;
+            var info = await Inbox.GetInfoAsync(user, lifetime.Token);
+            isAdmin = info.IsContactAdmin;
+            if (isAdmin) await ReloadAsync(user);
+        }
+        catch (ContactInboxForbiddenException) { isAdmin = false; }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning("Contact inbox load failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+            error = "Contact messages are unavailable. Try again later.";
+        }
+        finally { loading = false; }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!isAdmin || subscription is not null) return;
+        try
+        {
+            timeModule = await JS.InvokeAsync<IJSObjectReference>("import", "./insights.js");
+            var preferences = await timeModule.InvokeAsync<ViewerPreferences>("viewerPreferences");
+            if (preferences is not null)
+            {
+                try { timeZone = TimeZoneInfo.FindSystemTimeZoneById(preferences.TimeZone); localTimeAvailable = true; }
+                catch (TimeZoneNotFoundException) { }
+                catch (InvalidTimeZoneException) { }
+            }
+        }
+        catch (JSException ex) { Logger.LogWarning("Contact inbox local time unavailable. ExceptionType={ExceptionType}", ex.GetType().Name); }
+        subscription = LiveUpdates.Subscribe(LinkChangeScope.Admin, ContactInboxHint.ScopeId, () => InvokeAsync(QueueRefresh));
+        LiveUpdates.ConnectionChanged += OnConnectionChanged;
+        liveUpdateError = !LiveUpdates.IsConnected;
+        StateHasChanged();
+    }
+
+    private async Task ReloadAsync(System.Security.Claims.ClaimsPrincipal user)
+    {
+        var page = await Inbox.GetPageAsync(user, cancellationToken: lifetime.Token);
+        messages.Clear();
+        messages.AddRange(page.Items);
+        nextCursor = page.NextCursor;
+        unhandledCount = page.UnhandledContactCount;
+        error = null;
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (nextCursor is null || loadingMore) return;
+        loadingMore = true;
+        try
+        {
+            var user = (await AuthenticationState).User;
+            var page = await Inbox.GetPageAsync(user, nextCursor, lifetime.Token);
+            var seen = messages.Select(x => x.Id).ToHashSet();
+            messages.AddRange(page.Items.Where(x => seen.Add(x.Id)));
+            nextCursor = page.NextCursor;
+            unhandledCount = page.UnhandledContactCount;
+            error = null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning("Contact inbox older page failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+            error = "Older messages are unavailable. Try again later.";
+        }
+        finally { loadingMore = false; }
+    }
+
+    private async Task MarkHandledAsync(Guid id)
+    {
+        if (marking) return;
+        marking = true;
+        try
+        {
+            var user = (await AuthenticationState).User;
+            await Inbox.MarkHandledAsync(user, id, lifetime.Token);
+            await ReloadAsync(user);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning("Contact inbox mark handled failed. MessageId={MessageId} ExceptionType={ExceptionType}", id, ex.GetType().Name);
+            error = "Unable to mark the message handled. Try again later.";
+        }
+        finally { marking = false; }
+    }
+
+    private void QueueRefresh()
+    {
+        if (lifetime.IsCancellationRequested || pending is not null) return;
+        pending = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        _ = RefreshAfterHintAsync(pending);
+    }
+
+    private async Task RefreshAfterHintAsync(CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(int.Parse(Configuration["LiveUpdates:DebounceMilliseconds"]!), cancellation.Token);
+            var user = (await AuthenticationState).User;
+            await InvokeAsync(async () => { await ReloadAsync(user); StateHasChanged(); });
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning("Contact inbox live update failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+        }
+        finally { if (ReferenceEquals(pending, cancellation)) pending = null; cancellation.Dispose(); }
+    }
+
+    private void OnConnectionChanged(bool connected) => _ = InvokeAsync(() =>
+    {
+        liveUpdateError = !connected;
+        if (connected) QueueRefresh();
+        StateHasChanged();
+    });
+
+    private string FormatTime(DateTimeOffset utc) => TimeZoneInfo.ConvertTime(utc, timeZone).ToString("g");
+    private static string NotificationStatus(ContactMessageItem item) =>
+        item.NotifiedAtUtc is not null ? "Sent" : item.FailedAtUtc is not null ? "Failed" : "Pending";
+    private static string Mailto(string email) => "mailto:" + Uri.EscapeDataString(email);
+
+    public async ValueTask DisposeAsync()
+    {
+        subscription?.Dispose();
+        LiveUpdates.ConnectionChanged -= OnConnectionChanged;
+        lifetime.Cancel();
+        pending?.Cancel();
+        if (timeModule is not null) try { await timeModule.DisposeAsync(); } catch (JSDisconnectedException) { }
+        lifetime.Dispose();
+    }
+}
