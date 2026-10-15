@@ -83,7 +83,7 @@ public sealed class SignOutHttpTests
 
         using var fresh = await client.GetAsync("/");
         var anonymousHtml = await fresh.Content.ReadAsStringAsync();
-        Assert.Contains("href=\"/account/signin\"", anonymousHtml);
+        Assert.Contains("href=\"/account/signin\" data-enhance-nav=\"false\"", anonymousHtml);
         Assert.DoesNotContain("action=\"/account/signout\"", anonymousHtml);
         using var signedOut = await client.GetAsync("/signed-out");
         Assert.Equal(HttpStatusCode.OK, signedOut.StatusCode);

@@ -44,7 +44,7 @@ public sealed class ComponentTests : BunitContext
         var navigation = Render<NavMenu>();
         Assert.Single(navigation.FindAll("a[href='/contact']"));
 
-        Assert.Single(navigation.FindAll("a[href='/account/signin']"));
+        Assert.Single(navigation.FindAll("a[href='/account/signin'][data-enhance-nav='false']"));
         Assert.Empty(navigation.FindAll("form[action='/account/signout']"));
     }
 
@@ -71,7 +71,7 @@ public sealed class ComponentTests : BunitContext
 
         Assert.True(Attribute.IsDefined(typeof(SignedOut), typeof(AllowAnonymousAttribute)));
         Assert.Contains("You're signed out.", page.Find("h1").TextContent);
-        Assert.Single(page.FindAll("a[href='/account/signin']"));
+        Assert.Single(page.FindAll("a[href='/account/signin'][data-enhance-nav='false']"));
         Assert.Single(page.FindAll("a[href='/']"));
     }
 
