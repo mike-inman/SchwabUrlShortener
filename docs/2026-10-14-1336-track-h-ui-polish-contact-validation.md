@@ -74,4 +74,4 @@ The [addendum handoff](2026-10-14-1950-track-h-form-ux-addendum-handoff.md) was 
 
 Final Compose rerun: **40/40 integration, 44/44 unit, and 85/85 Web tests passed** in `schwab-trackh-ux-1950` on loopback port `18095` and the isolated `10.251.50.0/24` network. The Web total includes the real Redis test and all new form/time-zone checks. The corrected local-time assertion uses the active culture's format, so it passes in both the host and container test environments.
 
-The PR remains unmerged. The current rebased addendum has not been pushed, so its PR CI result is pending a separately approved push.
+The implementation and evidence were committed locally at `48bf307`. The PR remains unmerged. The current rebased addendum has not been pushed, so its PR CI result is pending a separately approved push.
