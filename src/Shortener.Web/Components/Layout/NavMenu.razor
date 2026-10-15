@@ -19,7 +19,7 @@
                 <NavLink href="/dashboard">Managed links</NavLink>
                 <form method="post" action="/account/signout"><AntiforgeryToken /><button class="nav-button" type="submit">Sign out</button></form>
             </Authorized>
-            <NotAuthorized><a href="/account/signin">Sign in</a></NotAuthorized>
+            <NotAuthorized><a href="/account/signin" data-enhance-nav="false">Sign in</a></NotAuthorized>
         </AuthorizeView>
     }
 </nav>
