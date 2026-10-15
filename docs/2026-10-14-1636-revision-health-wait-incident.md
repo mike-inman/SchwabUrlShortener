@@ -1,5 +1,7 @@
 # Production revision health wait incident — 2026-10-14 16:36 CDT
 
+**Status: closed 2026-10-14 19:48 CDT.**
+
 ## Purpose and scope
 
 Record deploy run [38626309390](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38626309390), repair its revision health parser, and require a gated manual dispatch proof before another automatic deployment. This change affects only the revision wait and its CI regression test. It does not change application images, traffic, credentials, or the resource lock.
@@ -20,6 +22,13 @@ No user impact was observed. Application Insights request telemetry for 20:00–
 
 The wait now calls `az containerapp revision show --output json` and parses both properties into one tab-separated record with `jq`, requiring the returned revision name to match. Missing status remains pending, and an actual `Failed` or `Unhealthy` state still fails. The same wait function serves updates and rollback.
 
-The parser test uses sanitized JSON projections captured from `az containerapp revision show` for Web `--0000008`, Analytics `--0000002`, and API `--0000009` and `--0000010`. The earlier API revision is now `Stopped/Healthy`; the test keeps that combination distinct from `Running/Healthy`. The deployment identity has `Reader` on the resource group, whose built-in actions include `*/read`; the failed run also read revision status. Direct proof that this identity can use the new `revision show` path awaits the gated manual dispatch.
+The parser test uses sanitized JSON projections captured from `az containerapp revision show` for Web `--0000008`, Analytics `--0000002`, and API `--0000009` and `--0000010`. The earlier API revision is now `Stopped/Healthy`; the test keeps that combination distinct from `Running/Healthy`. The deployment identity has `Reader` on the resource group, whose built-in actions include `*/read`. The successful gated run below confirms that the identity can use the new `revision show` path.
 
-Local parser test and Bash syntax check passed. `DEPLOY_ENABLED` was set to `false` and read back from GitHub to prevent an automatic deployment while the fix is prepared. The workflow condition is corrected so this variable gates automatic `workflow_run` deployments but an explicit `workflow_dispatch` from `main` can still enter the required production approval gate. Before any other deployment: get all required CI checks green, merge only with Michael's approval while automatic deployment is disabled, manually dispatch `Deploy production` from the fixed `main` with `smoke_expect_fail=false`, and wait for Michael to approve the `production` environment. Confirm the run passes revision waits and public smoke checks, then verify the final Azure revision and traffic state. Restore `DEPLOY_ENABLED=true` only after success and API readback. Do not approve the environment on Michael's behalf.
+Local parser test and Bash syntax check passed. The workflow condition gates automatic `workflow_run` deployments with `DEPLOY_ENABLED`, while an explicit `workflow_dispatch` from `main` still enters the required production approval gate.
+
+## Closure evidence — 2026-10-14
+
+- PR [#12](https://github.com/mike-inman/SchwabUrlShortener/pull/12) passed all ten required checks and was rebase-merged. The merged `main` CI [passed](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38650299899) at `e5fbaade353b1387cba6104d70167116c18863e4`. Its automatic deployment [skipped](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38650637779) while `DEPLOY_ENABLED=false`.
+- Michael approved the `production` environment for manual [deploy run 38650685708](https://github.com/mike-inman/SchwabUrlShortener/actions/runs/38650685708), dispatched from that `main` commit with `smoke_expect_fail=false`. Azure login, migration, image updates, revision waits, and public smoke all passed. Liveness, readiness, favicon, www redirect, guest creation, guest URL host, and guest redirect checks passed. Rollback was not needed.
+- Azure readback showed API `ca-shortener-api--0000011`, Analytics `ca-shortener-analytics--0000003`, and Web `ca-shortener-web--0000009` each `Running/Healthy` with 100% traffic. The `CanNotDelete` lock remained in place. GitHub API readback confirmed `DEPLOY_ENABLED=true` after the successful run.
+- The separate deliberate `SMOKE_EXPECT_FAIL=true` rollback drill remains planned and unrun; it requires Michael's later confirmation.
