@@ -26,9 +26,10 @@ require_digest_image() {
 wait_revision() {
   local app=$1 revision=$2 state health attempt row
   for attempt in {1..60}; do
-    row=$(az containerapp revision list --name "$app" --resource-group "$deployment_group" \
-      --query "[?name=='$revision'].[properties.runningState,properties.healthState] | [0]" --output tsv) \
-      || fail_deploy "$app revision status query failed"
+    row=$(az containerapp revision show --name "$app" --revision "$revision" \
+      --resource-group "$deployment_group" --output json |
+      jq -er --arg revision "$revision" -f .github/scripts/revision-status.jq) \
+      || fail_deploy "$app revision status query or parse failed"
     read -r state health <<< "$row"
     if [[ $state == Running && $health == Healthy ]]; then
       summary_line "- $app revision: \`$revision\` (Running, Healthy)"
