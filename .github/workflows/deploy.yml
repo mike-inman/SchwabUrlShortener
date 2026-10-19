@@ -45,7 +45,7 @@ jobs:
       DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       SMOKE_EXPECT_FAIL: ${{ inputs.smoke_expect_fail && 'true' || 'false' }}
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
@@ -74,7 +74,7 @@ jobs:
             echo '- Failed: subscription or resource group differs from the reviewed production target.' >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         id: login
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
